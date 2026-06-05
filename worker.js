@@ -1,5 +1,5 @@
 // ============================================================
-// TRADING AI PRO V13 - AI INSTITUTIONAL SMC++
+// TRADING AI PRO V13 ULTRA - النسخة الكاملة
 // ============================================================
 
 const TELEGRAM_BOT_TOKEN = '8915873552:AAEWPlRdl65nKWA3Ksnbj0yc11A97eX2qCI';
@@ -21,7 +21,10 @@ const CONFIG = {
   MIN_CANDLE_BODY_RATIO: 0.6,
   LIQUIDITY_LOOKBACK: 30,
   AI_SCORE_THRESHOLD: 70,
-  AI_LIQUIDITY_THRESHOLD: 40
+  AI_LIQUIDITY_THRESHOLD: 40,
+  TP1_WEIGHT: 0.3,
+  TP2_WEIGHT: 0.3,
+  TP3_WEIGHT: 0.4
 };
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -34,7 +37,7 @@ const WATCH_LIST = [
   'DOGE', 'PEPE', 'WIF', 'FLOKI', 'BONK'
 ];
 
-// ========== المؤشرات الأساسية ==========
+// ========== المؤشرات ==========
 function ema(data, period) {
   if (data.length < period) return data[data.length - 1];
   const k = 2 / (period + 1);
@@ -98,6 +101,23 @@ function calculateATR(data, period = 14) {
   let atr = trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period;
   for (let i = period; i < trueRanges.length; i++) atr = (atr * (period - 1) + trueRanges[i]) / period;
   return atr;
+}
+
+function calculateExpectedReward(tp1, tp2, tp3, entry, sl, side) {
+  let reward1, reward2, reward3;
+  if (side === 'LONG') {
+    reward1 = ((tp1 - entry) / entry) * 100 * CONFIG.TP1_WEIGHT;
+    reward2 = ((tp2 - entry) / entry) * 100 * CONFIG.TP2_WEIGHT;
+    reward3 = ((tp3 - entry) / entry) * 100 * CONFIG.TP3_WEIGHT;
+  } else {
+    reward1 = ((entry - tp1) / entry) * 100 * CONFIG.TP1_WEIGHT;
+    reward2 = ((entry - tp2) / entry) * 100 * CONFIG.TP2_WEIGHT;
+    reward3 = ((entry - tp3) / entry) * 100 * CONFIG.TP3_WEIGHT;
+  }
+  const risk = side === 'LONG' ? ((entry - sl) / entry) * 100 : ((sl - entry) / entry) * 100;
+  const expectedReward = reward1 + reward2 + reward3;
+  const riskReward = (expectedReward / risk).toFixed(2);
+  return { expectedReward: expectedReward.toFixed(2), riskReward };
 }
 
 function liquiditySweep(data) {
@@ -265,7 +285,9 @@ async function processCoin(coin, kv) {
     const entry = generateEntry(data15m, structureV2.trend);
     if (!entry) return;
     
-    const msg = `🧠 *V13 AI SIGNAL* 🧠\n━━━━━━━━━━━━━━━━━━━━\n🪙 *${coin}/USDT*\n🎯 *${entry.side}*\n💰 *$${entry.entry.toFixed(2)}*\n📊 *AI Score: ${smScore}/100*\n\n🎯 TP1: *$${entry.tp1.toFixed(2)}*\n🎯 TP2: *$${entry.tp2.toFixed(2)}*\n🎯 TP3: *$${entry.tp3.toFixed(2)}*\n🛑 SL: *$${entry.sl.toFixed(2)}*\n\n📌 *Analysis:*\n• Structure: *${structureV2.trend}*\n• FVG: *${fvg ? '✅' : '❌'}*\n• Liquidity Sweep: *${sweep.buySideSweep || sweep.sellSideSweep ? '✅' : '❌'}*\n\n🤖 *AI Filter Passed*`;
+    const { expectedReward, riskReward } = calculateExpectedReward(entry.tp1, entry.tp2, entry.tp3, entry.entry, entry.sl, entry.side);
+    
+    const msg = `🧠 *V13 ULTRA SIGNAL* 🧠\n━━━━━━━━━━━━━━━━━━━━\n🪙 *${coin}/USDT*\n🎯 *${entry.side}*\n💰 *$${entry.entry.toFixed(2)}*\n📊 *AI Score: ${smScore}/100*\n📊 *Expected Profit: +${expectedReward}%*\n📐 *Risk/Reward: 1:${riskReward}*\n\n🎯 TP1: *$${entry.tp1.toFixed(2)}* (+${((entry.tp1-entry.entry)/entry.entry*100).toFixed(2)}%)\n🎯 TP2: *$${entry.tp2.toFixed(2)}* (+${((entry.tp2-entry.entry)/entry.entry*100).toFixed(2)}%)\n🎯 TP3: *$${entry.tp3.toFixed(2)}* (+${((entry.tp3-entry.entry)/entry.entry*100).toFixed(2)}%)\n🛑 SL: *$${entry.sl.toFixed(2)}* (${((entry.sl-entry.entry)/entry.entry*100).toFixed(2)}%)\n\n📌 *AI Analysis:*\n• Structure: *${structureV2.trend}* | CHOCH: *${structureV2.CHOCH ? '✅' : '❌'}*\n• FVG: *${fvg ? `✅ ${fvg.type}` : '❌'}*\n• Liquidity Sweep: *${sweep.buySideSweep || sweep.sellSideSweep ? '✅' : '❌'}*\n• Momentum: *${macdData.crossUp || macdData.crossDown ? '✅' : '❌'}*\n\n🤖 *AI Filter Passed* | ⚡ *Auto-Tracked*`;
     
     await sendTelegram(TELEGRAM_CHAT_ID, msg);
     
@@ -273,39 +295,115 @@ async function processCoin(coin, kv) {
       cooldown[symbol] = Date.now();
       await kv.put('COOLDOWN', JSON.stringify(cooldown));
       await kv.put('SIGNALS_TODAY', (signalsToday + 1).toString());
+      
+      let stats = await kv.get('STATS');
+      let statsObj = stats ? JSON.parse(stats) : { total: 0, signals: [], wins: 0, losses: 0, totalProfit: 0 };
+      statsObj.total++;
+      statsObj.signals.push({ coin, side: entry.side, entry: entry.entry, aiScore: smScore, expectedReward, timestamp: Date.now() });
+      if (statsObj.signals.length > 200) statsObj.signals.shift();
+      await kv.put('STATS', JSON.stringify(statsObj));
     }
   } catch(e) { console.error(`Error ${coin}:`, e); }
 }
 
 async function marketScanner(kv) {
-  console.log('🧠 V13 AI Scanner Starting...');
+  console.log('🧠 V13 ULTRA Scanner Starting...');
   for (let i = 0; i < WATCH_LIST.length; i += 4) {
     const batch = WATCH_LIST.slice(i, i + 4);
     await Promise.all(batch.map(coin => processCoin(coin, kv)));
     await delay(1000);
   }
-  console.log('✅ V13 AI Complete');
+  console.log('✅ V13 ULTRA Complete');
 }
 
 async function getDashboardHTML(kv) {
-  let stats = { total: 0 };
+  let stats = { total: 0, signals: [], wins: 0, losses: 0, totalProfit: 0 };
   if (kv) {
     const raw = await kv.get('STATS');
     if (raw) stats = JSON.parse(raw);
   }
+  
+  const winRate = stats.total > 0 ? ((stats.wins / stats.total) * 100).toFixed(1) : 0;
+  const avgProfit = stats.signals.length > 0 ? (stats.signals.reduce((a,b) => a + (parseFloat(b.expectedReward) || 0), 0) / stats.signals.length).toFixed(2) : 0;
+  
+  // أفضل عملة
+  const coinStats = {};
+  stats.signals.forEach(s => {
+    if (!coinStats[s.coin]) coinStats[s.coin] = { count: 0, totalScore: 0 };
+    coinStats[s.coin].count++;
+    coinStats[s.coin].totalScore += s.aiScore || 0;
+  });
+  const bestCoin = Object.entries(coinStats).sort((a,b) => (b[1].totalScore/b[1].count) - (a[1].totalScore/a[1].count))[0]?.[0] || 'N/A';
+  
   return `<!DOCTYPE html>
 <html>
-<head><meta charset="UTF-8"><title>Trading AI Pro V13</title>
-<style>body{background:#0a0a1a;color:#fff;font-family:sans-serif;padding:20px;text-align:center}</style>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Trading AI Pro V13 ULTRA - Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 100%); color: #fff; padding: 20px; }
+    .container { max-width: 1200px; margin: 0 auto; }
+    h1 { text-align: center; margin-bottom: 10px; font-size: 2em; background: linear-gradient(135deg, #00b4d8, #90e0ef); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    .subtitle { text-align: center; color: #00b4d8; margin-bottom: 30px; font-size: 14px; }
+    .badge { background: linear-gradient(135deg, #00b4d8, #0077b6); padding: 5px 15px; border-radius: 20px; font-size: 12px; display: inline-block; margin-bottom: 20px; }
+    .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+    .stat-card { background: rgba(255,255,255,0.1); border-radius: 15px; padding: 20px; text-align: center; backdrop-filter: blur(10px); }
+    .stat-card .value { font-size: 32px; font-weight: bold; color: #00ff88; }
+    .stat-card .label { font-size: 14px; opacity: 0.8; margin-top: 5px; }
+    .chart-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; margin-bottom: 30px; }
+    .chart-card { background: rgba(255,255,255,0.05); border-radius: 15px; padding: 20px; }
+    .chart-card h3 { margin-bottom: 15px; color: #00b4d8; }
+    canvas { max-height: 250px; }
+    table { width: 100%; background: rgba(255,255,255,0.05); border-radius: 15px; overflow: hidden; }
+    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
+    th { color: #00b4d8; }
+    .status-long { color: #00ff88; }
+    .status-short { color: #ff4444; }
+  </style>
 </head>
 <body>
-<h1>🧠 Trading AI Pro V13</h1>
-<p>AI Institutional SMC++ | Smart Money Score | FVG | CHOCH/BOS</p>
-<div style="background:#1a1a2e;padding:20px;border-radius:15px;margin:20px auto;max-width:400px">
-<h2>🎯 Total Signals</h2>
-<div style="font-size:48px;color:#00b4d8">${stats.total}</div>
+<div class="container">
+  <h1>🧠 Trading AI Pro V13 ULTRA</h1>
+  <div class="subtitle">AI Institutional SMC++ | Smart Money Score | FVG | CHOCH/BOS</div>
+  <div style="text-align: center;"><span class="badge">🔥 Expected Profit | Risk/Reward | Advanced Stats 🔥</span></div>
+  
+  <div class="stats-grid">
+    <div class="stat-card"><div class="value">${stats.total}</div><div class="label">Total Signals</div></div>
+    <div class="stat-card"><div class="value">${winRate}%</div><div class="label">Win Rate</div></div>
+    <div class="stat-card"><div class="value">${stats.wins}</div><div class="label">Wins</div></div>
+    <div class="stat-card"><div class="value">${stats.losses}</div><div class="label">Losses</div></div>
+    <div class="stat-card"><div class="value">+${stats.totalProfit}%</div><div class="label">Total Profit</div></div>
+    <div class="stat-card"><div class="value">+${avgProfit}%</div><div class="label">Avg Profit/Signal</div></div>
+    <div class="stat-card"><div class="value">${bestCoin}</div><div class="label">Best Coin</div></div>
+    <div class="stat-card"><div class="value">${CONFIG.AI_SCORE_THRESHOLD}%</div><div class="label">AI Threshold</div></div>
+  </div>
+  
+  <div class="chart-grid">
+    <div class="chart-card"><h3>📈 Profit Progression</h3><canvas id="profitChart"></canvas></div>
+    <div class="chart-card"><h3>🎯 Win/Loss Ratio</h3><canvas id="winLossChart"></canvas></div>
+  </div>
+  
+  <h3 style="margin: 20px 0 10px;">📊 Recent Signals</h3>
+  <table><thead><tr><th>Coin</th><th>Side</th><th>Entry</th><th>AI Score</th><th>Expected Profit</th><th>Time</th></tr></thead>
+  <tbody>${stats.signals.slice(-20).reverse().map(s => `<tr><td><strong>${s.coin}</strong></td><td class="status-${s.side?.toLowerCase()}">${s.side}</td><td>$${s.entry?.toFixed(2)}</td><td>${s.aiScore}%</td><td class="status-${s.side?.toLowerCase()}">+${s.expectedReward || 0}%</td><td>${new Date(s.timestamp).toLocaleString()}</td></tr>`).join('')}</tbody>
+  </table>
 </div>
-<p>🤖 AI Threshold: ≥70% | 🕳 FVG Required | 🧲 Liquidity ≥40%</p>
+<script>
+const profitData = ${JSON.stringify(stats.signals.slice(-30).map(s => parseFloat(s.expectedReward) || 0))};
+new Chart(document.getElementById('profitChart'), {
+  type: 'line',
+  data: { datasets: [{ label: 'Expected Profit %', data: profitData, borderColor: '#00ff88', fill: false }] },
+  options: { responsive: true, plugins: { legend: { labels: { color: '#fff' } } } }
+});
+new Chart(document.getElementById('winLossChart'), {
+  type: 'doughnut',
+  data: { labels: ['Wins', 'Losses'], datasets: [{ data: [${stats.wins}, ${stats.losses}], backgroundColor: ['#00ff88', '#ff4444'] }] },
+  options: { responsive: true, plugins: { legend: { labels: { color: '#fff' } } } }
+});
+</script>
 </body>
 </html>`;
 }
@@ -330,7 +428,6 @@ export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(marketScanner(env.SIGNALS_KV));
   },
-  
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const kv = env.SIGNALS_KV;
@@ -342,7 +439,6 @@ export default {
     if (url.pathname === '/webhook' && request.method === 'POST') {
       try {
         const update = await request.json();
-        
         if (update.callback_query) {
           const cb = update.callback_query;
           if (cb.data === 'btc') {
@@ -355,13 +451,11 @@ export default {
           await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { method: 'POST', body: JSON.stringify({ callback_query_id: cb.id }) });
           return new Response('OK');
         }
-        
         if (update.message && update.message.text) {
           const chatId = update.message.chat.id;
           const text = update.message.text.trim().toUpperCase();
-          
           if (text === '/START') {
-            await sendTelegram(chatId, `🧠 *V13 AI INSTITUTIONAL SMC++* 🧠\n✅ AI-Powered Institutional Bot\n📊 Dashboard: https://${url.hostname}/dashboard\n\n🤖 AI Threshold: 70%`, MENU);
+            await sendTelegram(chatId, `🧠 *V13 ULTRA* 🧠\n━━━━━━━━━━━━━━━━━━━━━\n✅ AI Institutional SMC++\n✅ Expected Profit & Risk/Reward\n✅ Advanced Statistics\n📊 Dashboard: https://${url.hostname}/dashboard\n\n🤖 AI Threshold: 70%`, MENU);
           } else {
             await sendTelegram(chatId, `✅ مرحباً! أرسل /start للقائمة`);
           }
@@ -369,7 +463,6 @@ export default {
       } catch(e) {}
       return new Response('OK');
     }
-    
     return new Response('Not Found', { status: 404 });
   }
 };
