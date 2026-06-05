@@ -452,11 +452,77 @@ export default {
           const text = update.message.text.trim().toUpperCase();
           
           if (text === '/START') {
-            await sendTelegram(token, chatId, `🏦 *V14 ULTIMATE* 🏦\n━━━━━━━━━━━━━━━━━━━━━\n✅ *Professional Trading Bot*\n\n📊 *Features:*\n• Multi-Timeframe (4H+1H+15M)\n• Premium Score System\n• Volume Filter (≥1.5x)\n• Order Blocks & FVG\n• Premium/Discount Zones\n• Position Size Calculator\n• Risk Management\n\n📈 *AI Threshold: 85%*\n\n📊 Dashboard: https://${url.hostname}/dashboard\n\n💎 *للاشتراك:* /subscribe`, MENU);
+            await sendTelegram(token, chatId, `🏦 *V14 ULTIMATE* 🏦
+━━━━━━━━━━━━━━━━━━━━━
+✅ *Professional Trading Bot*
+
+📋 *الأوامر المتاحة:*
+
+🔹 /start - عرض القائمة الرئيسية
+🔹 /menu - عرض الأزرار التفاعلية
+🔹 /btc - سعر البيتكوين
+🔹 /eth - سعر الإيثريوم
+🔹 /sol - سعر السولانا
+🔹 /price [عملة] - سعر أي عملة
+🔹 /top - أفضل 5 عملات صاعدة
+🔹 /fear - مؤشر الخوف والطمع
+🔹 /stats - إحصائيات البوت
+🔹 /scan - فحص يدوي للسوق
+🔹 /subscribe - الاشتراك المميز
+🔹 /about - معلومات الإصدار
+
+📊 Dashboard: https://${url.hostname}/dashboard
+
+🤖 *AI Threshold: 85%*
+💎 للاشتراك المميز: /subscribe`, MENU);
           } else if (text === '/SUBSCRIBE') {
-            await sendTelegram(token, chatId, `💎 *باقة الاشتراك المميز* 💎\n━━━━━━━━━━━━━━━━━━━━\n📊 *المميزات:*\n• إشارات حصرية يومياً\n• أولوية الدعم الفني\n• تحليلات متقدمة\n• تحديثات فورية\n\n💰 *السعر:* $49/شهر\n\nللاشتراك، تواصل مع الدعم: @SupportBot`);
+            await sendTelegram(token, chatId, `💎 *باقة الاشتراك المميز* 💎
+━━━━━━━━━━━━━━━━━━━━
+📊 *المميزات:*
+• إشارات حصرية يومياً
+• أولوية الدعم الفني
+• تحليلات متقدمة
+• تحديثات فورية
+
+💰 *السعر:* \$49/شهر
+
+للاشتراك، تواصل مع الدعم: @SupportBot`);
+          } else if (text === '/ABOUT') {
+            await sendTelegram(token, chatId, `🏦 *V14 ULTIMATE* 🏦
+━━━━━━━━━━━━━━━━━━━━━
+📅 *الإصدار:* V14.0
+📊 *الميزات:*
+• Multi-Timeframe (4H+1H+15M)
+• Premium Score System (85+)
+• Volume Filter (≥1.5x)
+• Order Blocks & FVG
+• Premium/Discount Zones
+• Position Size Calculator
+• Risk Management (1%)
+
+👨‍💻 *المطور:* @MrCrypto166
+📡 *الحالة:* تشغيل مستقر`);
+          } else if (text === '/HELP') {
+            await sendTelegram(token, chatId, `📋 *قائمة المساعدة*
+━━━━━━━━━━━━━━━━━━━━
+🔹 /start - عرض القائمة الرئيسية
+🔹 /menu - عرض الأزرار
+🔹 /btc - سعر البيتكوين
+🔹 /eth - سعر الإيثريوم
+🔹 /sol - سعر السولانا
+🔹 /price [عملة] - سعر أي عملة
+🔹 /top - أفضل 5 عملات صاعدة
+🔹 /fear - مؤشر الخوف
+🔹 /stats - إحصائيات البوت
+🔹 /scan - فحص يدوي للسوق
+🔹 /subscribe - الاشتراك
+🔹 /about - معلومات الإصدار
+
+📊 Dashboard: https://${url.hostname}/dashboard`);
           } else {
-            await sendTelegram(token, chatId, `📋 *V14 Commands*\n/start - Main Menu\n/stats - Statistics\n/btc - Bitcoin Price\n/top - Top Gainers\n/subscribe - Subscription Info`);
+            await sendTelegram(token, chatId, `📋 *أمر غير معروف*
+━━━━━━━━━━━━━━━━━━━━
+استخدم /help لعرض جميع الأوامر المتاحة`);
           }
         }
       } catch(e) {}
