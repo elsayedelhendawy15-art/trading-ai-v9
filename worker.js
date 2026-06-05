@@ -3,7 +3,7 @@
 // ============================================================
 
 const TELEGRAM_CHAT_ID = '-1003591113059';
-const CHANNEL_INVITE_LINK = 'https://t.me/mr_crypto16';
+const CHANNEL_INVITE_LINK = 'https://t.me/mr_crypto166';
 
 const CONFIG = {
   MAX_SIGNALS_PER_DAY: 25,
