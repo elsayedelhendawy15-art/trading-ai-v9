@@ -1,0 +1,7 @@
+name = "trading-ai-v13"
+main = "worker.js"
+compatibility_date = "2024-01-01"
+
+[[kv_namespaces]]
+binding = "SIGNALS_KV"
+id = "your-kv-id"
