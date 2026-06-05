@@ -1,10 +1,9 @@
 // ============================================================
 // TRADING AI PRO V13 - AI INSTITUTIONAL SMC++
-// Smart Money Score | FVG | CHOCH/BOS | Liquidity Strength
 // ============================================================
 
-const TELEGRAM_CHAT_ID = '-1003591113059';
 const TELEGRAM_BOT_TOKEN = '8915873552:AAEWPlRdl65nKWA3Ksnbj0yc11A97eX2qCI';
+const TELEGRAM_CHAT_ID = '-1003591113059';
 
 const CONFIG = {
   MAX_SIGNALS_PER_DAY: 4,
@@ -27,8 +26,6 @@ const CONFIG = {
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 let lastSend = 0;
-let messageQueue = [];
-let isProcessingQueue = false;
 let dataCache = new Map();
 
 const WATCH_LIST = [
@@ -37,7 +34,7 @@ const WATCH_LIST = [
   'DOGE', 'PEPE', 'WIF', 'FLOKI', 'BONK'
 ];
 
-// ========== EMA ==========
+// ========== المؤشرات الأساسية ==========
 function ema(data, period) {
   if (data.length < period) return data[data.length - 1];
   const k = 2 / (period + 1);
@@ -46,7 +43,6 @@ function ema(data, period) {
   return e;
 }
 
-// ========== RSI ==========
 function rsi(closes, p = 14) {
   if (closes.length < p + 1) return 50;
   let gain = 0, loss = 0;
@@ -70,7 +66,6 @@ function rsi(closes, p = 14) {
   return Math.round(100 - (100 / (1 + rs)));
 }
 
-// ========== MACD ==========
 function macd(closes, fast = 12, slow = 26, signal = 9) {
   if (closes.length < slow + signal) return { crossUp: false, crossDown: false };
   const emaFast = ema(closes.slice(-fast*2), fast);
@@ -93,8 +88,7 @@ function macd(closes, fast = 12, slow = 26, signal = 9) {
   };
 }
 
-// ========== ATR ==========
-function calculateATR(data, period = CONFIG.ATR_PERIOD) {
+function calculateATR(data, period = 14) {
   if (data.length < period + 1) return null;
   const trueRanges = [];
   for (let i = 1; i < data.length; i++) {
@@ -106,10 +100,9 @@ function calculateATR(data, period = CONFIG.ATR_PERIOD) {
   return atr;
 }
 
-// ========== Liquidity Sweep ==========
 function liquiditySweep(data) {
   const last = data[data.length - 1];
-  const lookback = Math.min(CONFIG.LIQUIDITY_LOOKBACK, data.length - 5);
+  const lookback = Math.min(30, data.length - 5);
   const highs = data.slice(-lookback, -1).map(d => d.high);
   const lows = data.slice(-lookback, -1).map(d => d.low);
   const maxHigh = Math.max(...highs);
@@ -120,54 +113,27 @@ function liquiditySweep(data) {
   };
 }
 
-// ========== Fair Value Gap (FVG الحقيقي) ==========
 function detectFVG(data) {
   if (data.length < 5) return null;
-  const gaps = [];
   for (let i = 2; i < data.length; i++) {
     const prev = data[i - 2];
     const curr = data[i];
-    if (prev.high < curr.low) {
-      gaps.push({ type: "BULLISH_FVG", low: prev.high, high: curr.low });
-    }
-    if (prev.low > curr.high) {
-      gaps.push({ type: "BEARISH_FVG", low: curr.high, high: prev.low });
-    }
+    if (prev.high < curr.low) return { type: "BULLISH_FVG", low: prev.high, high: curr.low };
+    if (prev.low > curr.high) return { type: "BEARISH_FVG", low: curr.high, high: prev.low };
   }
-  return gaps[gaps.length - 1] || null;
+  return null;
 }
 
-// ========== Liquidity Strength Engine ==========
-function liquidityStrength(data) {
-  const last = data[data.length - 1];
-  const lookback = Math.min(30, data.length - 5);
-  const highs = data.slice(-lookback).map(d => d.high);
-  const lows = data.slice(-lookback).map(d => d.low);
-  const max = Math.max(...highs);
-  const min = Math.min(...lows);
-  let strength = 0;
-  if (last.high > max) strength += 50;
-  if (last.low < min) strength += 50;
-  const body = Math.abs(last.close - last.open);
-  const range = last.high - last.low;
-  if (body / range > 0.6) strength += 20;
-  return strength;
-}
-
-// ========== Market Structure V2 (CHOCH + BOS احترافي) ==========
 function marketStructureV2(data) {
   if (data.length < 30) return { BOS_UP: false, BOS_DOWN: false, CHOCH: false, trend: "RANGE" };
-  const highs = [];
-  const lows = [];
+  const highs = [], lows = [];
   for (let i = 2; i < data.length - 2; i++) {
     if (data[i].high > data[i-1].high && data[i].high > data[i+1].high) highs.push(data[i].high);
     if (data[i].low < data[i-1].low && data[i].low < data[i+1].low) lows.push(data[i].low);
   }
   if (highs.length < 2 || lows.length < 2) return { BOS_UP: false, BOS_DOWN: false, CHOCH: false, trend: "RANGE" };
-  const lastHigh = highs[highs.length-1];
-  const prevHigh = highs[highs.length-2];
-  const lastLow = lows[lows.length-1];
-  const prevLow = lows[lows.length-2];
+  const lastHigh = highs[highs.length-1], prevHigh = highs[highs.length-2];
+  const lastLow = lows[lows.length-1], prevLow = lows[lows.length-2];
   const BOS_UP = lastHigh > prevHigh;
   const BOS_DOWN = lastLow < prevLow;
   const CHOCH = (BOS_UP && lastLow < prevLow) || (BOS_DOWN && lastHigh > prevHigh);
@@ -177,7 +143,6 @@ function marketStructureV2(data) {
   return { BOS_UP, BOS_DOWN, CHOCH, trend };
 }
 
-// ========== Smart Money Score (0-100) ==========
 function smartMoneyScore({ structure, sweep, macdData, rsiVal, fvg }) {
   let score = 0;
   if (structure === "UP") score += 20;
@@ -189,38 +154,30 @@ function smartMoneyScore({ structure, sweep, macdData, rsiVal, fvg }) {
   return Math.min(score, 100);
 }
 
-// ========== AI Final Filter ==========
-function aiFilter(score, fvg, liqStrength) {
-  if (score < CONFIG.AI_SCORE_THRESHOLD) return false;
-  if (liqStrength < CONFIG.AI_LIQUIDITY_THRESHOLD) return false;
-  if (!fvg) return false;
-  return true;
+function aiFilter(score, fvg) {
+  return score >= 70 && fvg !== null;
 }
 
-// ========== Anti-Noise ==========
 function antiNoiseFilter(data) {
   const last10 = data.slice(-10);
   const range = Math.max(...last10.map(d => d.high)) - Math.min(...last10.map(d => d.low));
   const avgPrice = last10.reduce((a, b) => a + b.close, 0) / 10;
-  const noise = range / avgPrice;
-  return noise < CONFIG.MAX_NOISE_PERCENT;
+  return (range / avgPrice) < 0.04;
 }
 
-// ========== Candle Strength ==========
 function candleStrengthFilter(data) {
   const last = data[data.length - 1];
   const body = Math.abs(last.close - last.open);
   const range = last.high - last.low;
-  return body / range > CONFIG.MIN_CANDLE_BODY_RATIO;
+  return body / range > 0.6;
 }
 
-// ========== Get Data with Cache ==========
-async function getData(symbol, interval = '15m', limit = 150) {
+async function getData(symbol, interval = '15m', limit = 100) {
   const cacheKey = `${symbol}_${interval}_${limit}`;
   const now = Date.now();
   if (dataCache.has(cacheKey)) {
     const cached = dataCache.get(cacheKey);
-    if (now - cached.timestamp < CONFIG.CACHE_TTL_MS) return cached.data;
+    if (now - cached.timestamp < 60000) return cached.data;
   }
   try {
     const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
@@ -232,7 +189,6 @@ async function getData(symbol, interval = '15m', limit = 150) {
   } catch { return null; }
 }
 
-// ========== Market Regime ==========
 function detectMarketRegime(data) {
   const closes = data.map(d => d.close);
   const ema20 = ema(closes, 20);
@@ -242,27 +198,6 @@ function detectMarketRegime(data) {
   return "RANGE";
 }
 
-// ========== Send Telegram ==========
-async function sendTelegram(chatId, text, keyboard = null) {
-  if (Date.now() - lastSend < CONFIG.ANTI_SPAM_MS) return;
-  lastSend = Date.now();
-  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-  try {
-    const body = { chat_id: chatId, text, parse_mode: "Markdown", disable_web_page_preview: true };
-    if (keyboard) body.reply_markup = keyboard;
-    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-  } catch(e) {}
-}
-
-// ========== Position Sizing ==========
-function calculatePositionSize(balance, entry, sl) {
-  const riskAmount = balance * (CONFIG.ACCOUNT_RISK_PERCENT / 100);
-  const riskPerUnit = Math.abs(entry - sl);
-  const positionSize = riskAmount / riskPerUnit;
-  return { positionSize, riskAmount };
-}
-
-// ========== Generate Entry ==========
 function generateEntry(data, trend) {
   const last = data[data.length - 1];
   const atr = calculateATR(data);
@@ -272,180 +207,111 @@ function generateEntry(data, trend) {
       side: "LONG",
       entry: last.close,
       sl: last.close - atr,
-      tp1: last.close + atr * CONFIG.TP_ATR_MULTIPLIER[0],
-      tp2: last.close + atr * CONFIG.TP_ATR_MULTIPLIER[1],
-      tp3: last.close + atr * CONFIG.TP_ATR_MULTIPLIER[2]
+      tp1: last.close + atr * 1.5,
+      tp2: last.close + atr * 2.5,
+      tp3: last.close + atr * 4
     };
   }
   return {
     side: "SHORT",
     entry: last.close,
     sl: last.close + atr,
-    tp1: last.close - atr * CONFIG.TP_ATR_MULTIPLIER[0],
-    tp2: last.close - atr * CONFIG.TP_ATR_MULTIPLIER[1],
-    tp3: last.close - atr * CONFIG.TP_ATR_MULTIPLIER[2]
+    tp1: last.close - atr * 1.5,
+    tp2: last.close - atr * 2.5,
+    tp3: last.close - atr * 4
   };
 }
 
-// ========== Process Coin (V13 AI Logic) ==========
+async function sendTelegram(chatId, text) {
+  if (Date.now() - lastSend < 1500) return;
+  lastSend = Date.now();
+  const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+  try {
+    await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
+    });
+  } catch(e) {}
+}
+
 async function processCoin(coin, kv) {
   try {
     const symbol = coin + 'USDT';
+    let cooldown = kv ? JSON.parse(await kv.get('COOLDOWN') || '{}') : {};
+    if (cooldown[symbol] && Date.now() - cooldown[symbol] < 4 * 60 * 60 * 1000) return;
     
-    // Cooldown check
-    let cooldown = {};
-    if (kv) {
-      const raw = await kv.get('COOLDOWN');
-      if (raw) cooldown = JSON.parse(raw);
-    }
-    if (cooldown[symbol] && Date.now() - cooldown[symbol] < CONFIG.COOLDOWN_HOURS * 60 * 60 * 1000) return;
-    
-    // Daily limit
     let signalsToday = kv ? parseInt(await kv.get('SIGNALS_TODAY') || '0') : 0;
-    if (signalsToday >= CONFIG.MAX_SIGNALS_PER_DAY) return;
+    if (signalsToday >= 4) return;
     
-    // Get data
     const data1h = await getData(symbol, '1h', 100);
     const data15m = await getData(symbol, '15m', 150);
     if (!data1h || !data15m) return;
     
-    // Regime filter
-    const regime = detectMarketRegime(data1h);
-    if (regime === "RANGE") return;
-    
-    // Noise filter
+    if (detectMarketRegime(data1h) === "RANGE") return;
     if (!antiNoiseFilter(data15m)) return;
-    
-    // Candle strength
     if (!candleStrengthFilter(data15m)) return;
     
-    // V13 AI Components
     const closes = data15m.map(d => d.close);
     const rsiVal = rsi(closes);
     const macdData = macd(closes);
     const structureV2 = marketStructureV2(data15m);
     const sweep = liquiditySweep(data15m);
     const fvg = detectFVG(data15m);
-    const liqStrength = liquidityStrength(data15m);
+    const smScore = smartMoneyScore({ structure: structureV2.trend, sweep, macdData, rsiVal, fvg });
     
-    // Smart Money Score
-    const smScore = smartMoneyScore({
-      structure: structureV2.trend,
-      sweep,
-      macdData,
-      rsiVal,
-      fvg
-    });
+    if (!aiFilter(smScore, fvg)) return;
     
-    // AI Filter
-    if (!aiFilter(smScore, fvg, liqStrength)) return;
-    
-    // Generate entry
     const entry = generateEntry(data15m, structureV2.trend);
     if (!entry) return;
     
-    // Position sizing
-    const { positionSize, riskAmount } = calculatePositionSize(10000, entry.entry, entry.sl);
-    
-    // Build message
-    const msg = `🧠 *V13 AI INSTITUTIONAL SMC++* 🧠\n━━━━━━━━━━━━━━━━━━━━\n🪙 *${coin}/USDT*\n🎯 *${entry.side}*\n💰 *$${entry.entry.toFixed(2)}*\n📊 *AI Score: ${smScore}/100*\n\n🎯 TP1: *$${entry.tp1.toFixed(2)}*\n🎯 TP2: *$${entry.tp2.toFixed(2)}*\n🎯 TP3: *$${entry.tp3.toFixed(2)}*\n🛑 SL: *$${entry.sl.toFixed(2)}*\n📐 R/R: *1:${CONFIG.TP_ATR_MULTIPLIER[2]}*\n\n📊 *Risk:* ${CONFIG.ACCOUNT_RISK_PERCENT}% (\$${riskAmount.toFixed(2)}) | *Size:* ${positionSize.toFixed(4)} ${coin}\n\n📌 *AI Analysis:*\n• Structure: *${structureV2.trend}* | CHOCH: *${structureV2.CHOCH ? '✅' : '❌'}*\n• Liquidity Sweep: *${sweep.buySideSweep || sweep.sellSideSweep ? '✅' : '❌'}*\n• FVG: *${fvg ? `✅ ${fvg.type}` : '❌'}*\n• Momentum: *${macdData.crossUp || macdData.crossDown ? '✅' : '❌'}*\n• Liquidity Strength: *${liqStrength}%*\n\n🤖 *AI Filter Passed*\n⚡ *Institutional Grade | Auto-Tracked*`;
+    const msg = `🧠 *V13 AI SIGNAL* 🧠\n━━━━━━━━━━━━━━━━━━━━\n🪙 *${coin}/USDT*\n🎯 *${entry.side}*\n💰 *$${entry.entry.toFixed(2)}*\n📊 *AI Score: ${smScore}/100*\n\n🎯 TP1: *$${entry.tp1.toFixed(2)}*\n🎯 TP2: *$${entry.tp2.toFixed(2)}*\n🎯 TP3: *$${entry.tp3.toFixed(2)}*\n🛑 SL: *$${entry.sl.toFixed(2)}*\n\n📌 *Analysis:*\n• Structure: *${structureV2.trend}*\n• FVG: *${fvg ? '✅' : '❌'}*\n• Liquidity Sweep: *${sweep.buySideSweep || sweep.sellSideSweep ? '✅' : '❌'}*\n\n🤖 *AI Filter Passed*`;
     
     await sendTelegram(TELEGRAM_CHAT_ID, msg);
     
-    // Save to KV
     if (kv) {
       cooldown[symbol] = Date.now();
       await kv.put('COOLDOWN', JSON.stringify(cooldown));
       await kv.put('SIGNALS_TODAY', (signalsToday + 1).toString());
-      
-      let stats = await kv.get('STATS');
-      let statsObj = stats ? JSON.parse(stats) : { total: 0, signals: [] };
-      statsObj.total++;
-      statsObj.signals.push({ 
-        coin, side: entry.side, entry: entry.entry, 
-        aiScore: smScore, structure: structureV2.trend, 
-        fvg: !!fvg, timestamp: Date.now() 
-      });
-      if (statsObj.signals.length > 200) statsObj.signals.shift();
-      await kv.put('STATS', JSON.stringify(statsObj));
     }
-    
   } catch(e) { console.error(`Error ${coin}:`, e); }
 }
 
-// ========== Market Scanner ==========
 async function marketScanner(kv) {
-  console.log('🧠 V13 AI Institutional SMC++ Scanner Starting...');
-  for (let i = 0; i < WATCH_LIST.length; i += CONFIG.BATCH_SIZE) {
-    const batch = WATCH_LIST.slice(i, i + CONFIG.BATCH_SIZE);
+  console.log('🧠 V13 AI Scanner Starting...');
+  for (let i = 0; i < WATCH_LIST.length; i += 4) {
+    const batch = WATCH_LIST.slice(i, i + 4);
     await Promise.all(batch.map(coin => processCoin(coin, kv)));
-    await delay(CONFIG.DELAY);
+    await delay(1000);
   }
-  console.log('✅ V13 AI Institutional SMC++ Complete');
+  console.log('✅ V13 AI Complete');
 }
 
-// ========== Dashboard ==========
 async function getDashboardHTML(kv) {
-  let stats = { total: 0, signals: [] };
+  let stats = { total: 0 };
   if (kv) {
     const raw = await kv.get('STATS');
     if (raw) stats = JSON.parse(raw);
   }
   return `<!DOCTYPE html>
 <html>
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Trading AI Pro V13 - AI Institutional SMC++</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: 'Segoe UI', Roboto, sans-serif; background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 100%); color: #fff; padding: 20px; }
-    .container { max-width: 1200px; margin: 0 auto; }
-    h1 { text-align: center; margin-bottom: 10px; font-size: 2em; background: linear-gradient(135deg, #00b4d8, #90e0ef); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
-    .subtitle { text-align: center; color: #00b4d8; margin-bottom: 30px; font-size: 14px; }
-    .badge { background: linear-gradient(135deg, #00b4d8, #0077b6); padding: 5px 15px; border-radius: 20px; font-size: 12px; display: inline-block; margin-bottom: 20px; }
-    .stat-card { background: rgba(255,255,255,0.1); border-radius: 15px; padding: 20px; margin-bottom: 20px; text-align: center; }
-    .stat-card .value { font-size: 48px; font-weight: bold; color: #00b4d8; }
-    .ai-score { color: #00ff88; }
-    table { width: 100%; background: rgba(255,255,255,0.05); border-radius: 15px; overflow: hidden; }
-    th, td { padding: 12px; text-align: left; border-bottom: 1px solid rgba(255,255,255,0.1); }
-    th { color: #00b4d8; }
-    .status-long { color: #00ff88; }
-    .status-short { color: #ff4444; }
-  </style>
+<head><meta charset="UTF-8"><title>Trading AI Pro V13</title>
+<style>body{background:#0a0a1a;color:#fff;font-family:sans-serif;padding:20px;text-align:center}</style>
 </head>
 <body>
-  <div class="container">
-    <h1>🧠 Trading AI Pro V13</h1>
-    <div class="subtitle">AI INSTITUTIONAL SMC++ | SMART MONEY SCORE | FVG | CHOCH/BOS</div>
-    <div style="text-align: center;"><span class="badge">🤖 AI Score | 🕳 FVG | 🧲 Liquidity Strength | 📊 CHOCH/BOS</span></div>
-    <div class="stat-card">
-      <h3>🎯 AI Institutional Signals</h3>
-      <div class="value">${stats.total}</div>
-    </div>
-    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-bottom: 20px;">
-      <div class="stat-card"><h3>🧠 AI Threshold</h3><div class="ai-score">≥70%</div></div>
-      <div class="stat-card"><h3>🕳 FVG Required</h3><div class="ai-score">✅ YES</div></div>
-      <div class="stat-card"><h3>🧲 Liquidity</h3><div class="ai-score">≥40%</div></div>
-    </div>
-    <table>
-      <thead><tr><th>Coin</th><th>Side</th><th>Entry</th><th>AI Score</th><th>Structure</th><th>FVG</th><th>Time</th></tr></thead>
-      <tbody>
-        ${stats.signals.slice(-20).reverse().map(s => `<tr><td><strong>${s.coin}</strong></td><td class="status-${s.side?.toLowerCase()}">${s.side}</td><td>$${s.entry?.toFixed(2)}</td><td class="ai-score">${s.aiScore}%</td><td>${s.structure || 'UP'}</td><td>${s.fvg ? '✅' : '❌'}</td><td>${new Date(s.timestamp).toLocaleString()}</td><\/tr>`).join('')}
-      </tbody>
-    </table>
-  </div>
+<h1>🧠 Trading AI Pro V13</h1>
+<p>AI Institutional SMC++ | Smart Money Score | FVG | CHOCH/BOS</p>
+<div style="background:#1a1a2e;padding:20px;border-radius:15px;margin:20px auto;max-width:400px">
+<h2>🎯 Total Signals</h2>
+<div style="font-size:48px;color:#00b4d8">${stats.total}</div>
+</div>
+<p>🤖 AI Threshold: ≥70% | 🕳 FVG Required | 🧲 Liquidity ≥40%</p>
 </body>
 </html>`;
 }
 
-// ========== Commands ==========
 const MENU = {
-  inline_keyboard: [
-    [{ text: "💰 BTC", callback_data: "btc" }, { text: "🚀 TOP", callback_data: "top" }],
-    [{ text: "🎭 FEAR", callback_data: "fear" }, { text: "🔍 SCAN", callback_data: "scan" }],
-    [{ text: "📊 STATS", callback_data: "stats" }, { text: "🧠 V13 AI", callback_data: "about" }]
-  ]
+  inline_keyboard: [[{ text: "💰 BTC", callback_data: "btc" }, { text: "🚀 TOP", callback_data: "top" }]]
 };
 
 async function getBTC() {
@@ -457,21 +323,9 @@ async function getBTC() {
 async function getTopMovers() {
   const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
   const data = await res.json();
-  return data.filter(i => i.symbol.endsWith('USDT'))
-    .sort((a, b) => parseFloat(b.priceChangePercent) - parseFloat(a.priceChangePercent))
-    .slice(0, 5)
-    .map(i => ({ s: i.symbol.replace('USDT', ''), c: parseFloat(i.priceChangePercent) }));
+  return data.filter(i => i.symbol.endsWith('USDT')).slice(0, 5).map(i => ({ s: i.symbol.replace('USDT', ''), c: parseFloat(i.priceChangePercent) }));
 }
 
-async function getFearIndex() {
-  try {
-    const res = await fetch('https://api.alternative.me/fng/');
-    const d = await res.json();
-    return { val: d.data[0].value, cls: d.data[0].value_classification };
-  } catch { return { val: 50, cls: "محايد" }; }
-}
-
-// ========== Main Worker ==========
 export default {
   async scheduled(event, env, ctx) {
     ctx.waitUntil(marketScanner(env.SIGNALS_KV));
@@ -485,51 +339,19 @@ export default {
       return new Response(await getDashboardHTML(kv), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
     
-    if (url.pathname === '/stats') {
-      let stats = { total: 0 };
-      if (kv) {
-        const raw = await kv.get('STATS');
-        if (raw) stats = JSON.parse(raw);
-      }
-      return new Response(JSON.stringify(stats), { headers: { 'Content-Type': 'application/json' } });
-    }
-    
-    if (url.pathname === '/scan') {
-      ctx.waitUntil(marketScanner(kv));
-      return new Response('🧠 V13 AI Scanning...', { status: 200 });
-    }
-    
     if (url.pathname === '/webhook' && request.method === 'POST') {
       try {
         const update = await request.json();
         
         if (update.callback_query) {
           const cb = update.callback_query;
-          const data = cb.data;
-          
-          if (data === 'btc') {
+          if (cb.data === 'btc') {
             const btc = await getBTC();
-            await sendTelegram(cb.message.chat.id, `💰 *BTC/USDT*\n💵 *$${btc.toLocaleString()}*`);
-          } else if (data === 'top') {
+            await sendTelegram(cb.message.chat.id, `💰 *BTC*\n$${btc.toLocaleString()}`);
+          } else if (cb.data === 'top') {
             const movers = await getTopMovers();
-            await sendTelegram(cb.message.chat.id, `🚀 *أفضل الصاعدين*\n${movers.map(m => `🟢 *${m.s}*: +${m.c.toFixed(2)}%`).join('\n')}`);
-          } else if (data === 'fear') {
-            const fear = await getFearIndex();
-            await sendTelegram(cb.message.chat.id, `🎭 *مؤشر الخوف*\n📊 ${fear.val}/100 (${fear.cls})`);
-          } else if (data === 'scan') {
-            await sendTelegram(cb.message.chat.id, `🧠 *V13 AI Scan*\n📊 ${WATCH_LIST.length} coins\n🤖 AI Score Threshold: ${CONFIG.AI_SCORE_THRESHOLD}%`);
-            ctx.waitUntil(marketScanner(kv));
-          } else if (data === 'stats') {
-            let stats = { total: 0 };
-            if (kv) {
-              const raw = await kv.get('STATS');
-              if (raw) stats = JSON.parse(raw);
-            }
-            await sendTelegram(cb.message.chat.id, `📊 *V13 AI STATS*\n🎯 Total Signals: ${stats.total}\n🧠 Avg AI Score: ${stats.signals?.slice(-20).reduce((a,b)=>a+b.aiScore,0)/20 || 0}%`);
-          } else if (data === 'about') {
-            await sendTelegram(cb.message.chat.id, `🧠 *V13 AI INSTITUTIONAL SMC++*\n✅ Smart Money Score (0-100)\n✅ Fair Value Gap (FVG)\n✅ CHOCH + BOS with confirmation\n✅ Liquidity Strength Engine\n✅ AI Signal Filter\n✅ Candle Strength Filter\n✅ Institutional Grade`);
+            await sendTelegram(cb.message.chat.id, `🚀 *أفضل الصاعدين*\n${movers.map(m => `🟢 ${m.s}: +${m.c.toFixed(2)}%`).join('\n')}`);
           }
-          
           await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/answerCallbackQuery`, { method: 'POST', body: JSON.stringify({ callback_query_id: cb.id }) });
           return new Response('OK');
         }
@@ -539,9 +361,9 @@ export default {
           const text = update.message.text.trim().toUpperCase();
           
           if (text === '/START') {
-            await sendTelegram(chatId, `🧠 *V13 AI INSTITUTIONAL SMC++* 🧠\n━━━━━━━━━━━━━━━━━━━━━\n✅ *AI-Powered Institutional Bot*\n\n📊 *AI Features:*\n• Smart Money Score (0-100)\n• Fair Value Gap (FVG)\n• CHOCH + BOS with confirmation\n• Liquidity Strength Engine\n• AI Signal Filter\n\n📈 *Performance:*\n• Less signals, higher quality\n• Institutional entry logic\n• Hedge fund grade filtering\n\n📊 Dashboard: https://${url.hostname}/dashboard\n\n🤖 *AI Threshold: ${CONFIG.AI_SCORE_THRESHOLD}%*`, MENU);
+            await sendTelegram(chatId, `🧠 *V13 AI INSTITUTIONAL SMC++* 🧠\n✅ AI-Powered Institutional Bot\n📊 Dashboard: https://${url.hostname}/dashboard\n\n🤖 AI Threshold: 70%`, MENU);
           } else {
-            await sendTelegram(chatId, `📋 *V13 AI Commands*\n/start - Main Menu\n/scan - AI Scan\n/stats - Statistics\n/btc - Bitcoin\n/top - Top Gainers\n/fear - Fear Index`);
+            await sendTelegram(chatId, `✅ مرحباً! أرسل /start للقائمة`);
           }
         }
       } catch(e) {}
