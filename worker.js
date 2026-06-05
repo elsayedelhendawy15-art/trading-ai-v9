@@ -1,69 +1,55 @@
 // ============================================================
-// TRADING AI PRO V15.1 - MULTI-CATEGORY SCANNER
+// TRADING AI PRO V15.5 - THE MASTER-CLASS QUANT SNIPER
 // ============================================================
 
 const TELEGRAM_CHAT_ID = '-1003591113059';
 
 const CONFIG = {
-  MAX_SIGNALS_PER_DAY: 15,
+  MAX_SIGNALS_PER_DAY: 25,       // فريم 5 د يتيح صفقات أكثر دقة واقتناصاً
   MIN_VOLUME_USD: 1000000,
-  COOLDOWN_HOURS: 2,
+  COOLDOWN_HOURS: 1,             
   BATCH_SIZE: 4,
-  DELAY: 1000,
+  DELAY: 800,                    // تسريع الفحص اللحظي
   ANTI_SPAM_MS: 1500,
   ATR_PERIOD: 14,
-  TP_ATR_MULTIPLIER: [1.5, 2.5, 4.0],
-  ACCOUNT_RISK_PERCENT: 1.0,
-  CACHE_TTL_MS: 30000,
-  AI_SCORE_THRESHOLD: 75,
+  ACCOUNT_RISK_PERCENT: 1.0,     // مخاطرة 1% من المحفظة
+  CACHE_TTL_MS: 15000,           // كاش سريع جداً لملائمة فريم 5 د
+  AI_SCORE_THRESHOLD: 80,        // سكور صارم لضمان الجودة
   VOLUME_RATIO_THRESHOLD: 1.3,
   TIMEFRAMES: {
-    MASTER: '4h',
-    CONFIRM: '1h',
-    ENTRY: '15m'
+    MASTER: '1h',                // الاتجاه العام
+    CONFIRM: '15m',              // التأكيد المتوسط
+    ENTRY: '5m'                  // نقطة القنص اللحظية
   }
 };
 
-// ========== أقسام العملات ==========
 const CATEGORIES = {
-  // 💰 العملات الكبرى (Blue Chips)
   MAJOR: [
     'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'LINK', 'TON',
-    'MATIC', 'ATOM', 'UNI', 'AAVE', 'MKR', 'CRV', 'LTC', 'BCH', 'ETC'
+    'MATIC', 'ATOM', 'UNI', 'AAVE', 'MKR', 'LTC', 'BCH'
   ],
-  
-  // 🚀 عملات الألفا (Mid Cap)
   ALPHA: [
     'SUI', 'NEAR', 'APT', 'FET', 'RNDR', 'OP', 'ARB', 'IMX', 'STX', 'SEI',
-    'TIA', 'INJ', 'JUP', 'PYTH', 'STRK', 'TAO', 'WLD', 'AGIX', 'OCEAN'
+    'TIA', 'INJ', 'JUP', 'PYTH', 'TAO', 'WLD'
   ],
-  
-  // 🐶 عملات الميم (Memes)
   MEME: [
     'DOGE', 'PEPE', 'WIF', 'FLOKI', 'BONK', 'SHIB', 'BRETT', 'BOME', 'MEW',
-    'POPCAT', 'MOODENG', 'NEIRO', 'TURBO', 'MYRO', 'SAMO'
-  ],
-  
-  // 🔥 عملات الإنفجار (High Volatility)
-  HIGH_VOL: [
-    'PEPE', 'WIF', 'BONK', 'POPCAT', 'NEIRO', 'TURBO', 'MYRO', 'BRETT'
-  ],
-  
-  // 🎯 جميع العملات (All in One)
-  ALL: []
+    'POPCAT', 'MOODENG', 'NEIRO', 'TURBO', 'MYRO'
+  ]
 };
-
-// تجميع القائمة الكاملة
-CATEGORIES.ALL = [...CATEGORIES.MAJOR, ...CATEGORIES.ALPHA, ...CATEGORIES.MEME];
-
-// القسم الافتراضي
-let CURRENT_CATEGORY = 'MAJOR';
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
 let lastSend = 0;
 let dataCache = new Map();
+let activeSignalsInSession = new Set();
 
-// ========== المؤشرات الفنية (نفسها كما هي) ==========
+function formatPrice(price, coin) {
+  if (!price) return "0.00";
+  if (price < 0.001) return price.toFixed(7);
+  if (price < 1.0) return price.toFixed(5);
+  return price.toFixed(2);
+}
+
 function ema(data, period) {
   if (data.length < period) return data[data.length - 1];
   const k = 2 / (period + 1);
@@ -72,11 +58,17 @@ function ema(data, period) {
   return e;
 }
 
+// دالة الـ ATR المطورة والمقلمة لتعطي ستوب لوز دقيق بالسنتيمتر
 function calculateATR(data, period = 14) {
   if (data.length < period + 1) return null;
+  const recentData = data.slice(-(period + 15)); 
   const trueRanges = [];
-  for (let i = 1; i < data.length; i++) {
-    const tr = Math.max(data[i].high - data[i].low, Math.abs(data[i].high - data[i-1].close), Math.abs(data[i].low - data[i-1].close));
+  for (let i = 1; i < recentData.length; i++) {
+    const tr = Math.max(
+      recentData[i].high - recentData[i].low, 
+      Math.abs(recentData[i].high - recentData[i-1].close), 
+      Math.abs(recentData[i].low - recentData[i-1].close)
+    );
     trueRanges.push(tr);
   }
   let atr = trueRanges.slice(0, period).reduce((a, b) => a + b, 0) / period;
@@ -149,12 +141,25 @@ function calculatePremiumScore({ structure, sweep, fvg, volumeRatio, pdZone, ent
   return Math.min(score, 100);
 }
 
+// دالة حساب حجم الصفقة والرافعة الموصى بها الذكية لفريم 5 دقائق
 function calculatePositionSize(accountBalance, entryPrice, stopLoss) {
   const riskAmount = accountBalance * (CONFIG.ACCOUNT_RISK_PERCENT / 100);
   const priceDifference = Math.abs(entryPrice - stopLoss);
+  if (priceDifference === 0) return { positionSize: "0", dollarValue: "0", riskAmount: "0", recommendedLeverage: 1 };
+  
   const positionSize = riskAmount / priceDifference;
-  const recommendedLeverage = Math.min(10, Math.floor((positionSize * entryPrice) / accountBalance) + 1);
-  return { positionSize: positionSize.toFixed(3), dollarValue: (positionSize * entryPrice).toFixed(2), riskAmount: riskAmount.toFixed(2), recommendedLeverage };
+  
+  // رافعة مالية مرنة وآمنة بناءً على قرب الستوب لوز لحماية الرصيد
+  let recommendedLeverage = Math.floor((positionSize * entryPrice) / accountBalance);
+  if (recommendedLeverage < 1) recommendedLeverage = 1;
+  if (recommendedLeverage > 10) recommendedLeverage = 10; // كحد أقصى للحماية من الانزلاق السعري
+  
+  return { 
+    positionSize: positionSize.toFixed(3), 
+    dollarValue: (positionSize * entryPrice).toFixed(2), 
+    riskAmount: riskAmount.toFixed(2), 
+    recommendedLeverage 
+  };
 }
 
 async function getData(symbol, interval = '15m', limit = 100) {
@@ -180,7 +185,7 @@ async function checkChannelSubscription(token, userId) {
 }
 
 async function sendTelegram(token, chatId, text, keyboard = null) {
-  if (Date.now() - lastSend < 1000) return;
+  if (Date.now() - lastSend < CONFIG.ANTI_SPAM_MS) await delay(CONFIG.ANTI_SPAM_MS);
   lastSend = Date.now();
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   const body = { chat_id: chatId, text, parse_mode: 'Markdown' };
@@ -188,10 +193,11 @@ async function sendTelegram(token, chatId, text, keyboard = null) {
   try { await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch(e) {}
 }
 
-// ========== معالجة العملات مع القسم المختار ==========
 async function processCoin(coin, token, kv) {
   try {
     const symbol = coin + 'USDT';
+    if (activeSignalsInSession.has(symbol)) return null;
+
     let cooldown = kv ? JSON.parse(await kv.get('COOLDOWN') || '{}') : {};
     if (cooldown[symbol] && Date.now() - cooldown[symbol] < CONFIG.COOLDOWN_HOURS * 60 * 60 * 1000) return null;
     
@@ -221,38 +227,49 @@ async function processCoin(coin, token, kv) {
     if (!atr) return null;
 
     const isLong = mtf.trend === "BULLISH";
-    const entryPrice = last.close;
-    const sl = isLong ? entryPrice - atr : entryPrice + atr;
-    const tp1 = isLong ? entryPrice + atr * 1.5 : entryPrice - atr * 1.5;
-    const tp2 = isLong ? entryPrice + atr * 2.5 : entryPrice - atr * 2.5;
-    const tp3 = isLong ? entryPrice + atr * 4.0 : entryPrice - atr * 4.0;
+    const entryPrice1 = last.close;
+    
+    // 🎯 ميزة الدخول المجزأ (DCA): الدخول الثاني يكون أفضل بـ 0.3% لضمان اقتناص الارتدادات
+    const entryPrice2 = isLong ? entryPrice1 * 0.997 : entryPrice1 * 1.003;
 
-    const position = calculatePositionSize(10000, entryPrice, sl);
+    const sl = isLong ? entryPrice1 - (atr * 1.2) : entryPrice1 + (atr * 1.2);
+    const tp1 = isLong ? entryPrice1 + atr * 1.2 : entryPrice1 - atr * 1.2;
+    const tp2 = isLong ? entryPrice1 + atr * 2.2 : entryPrice1 - atr * 2.2;
+    const tp3 = isLong ? entryPrice1 + atr * 3.5 : entryPrice1 - atr * 3.5;
 
-    // تحديد تصنيف العملة في أي قسم
+    const position = calculatePositionSize(10000, entryPrice1, sl);
+
     let category = 'MAJOR';
     if (CATEGORIES.ALPHA.includes(coin)) category = 'ALPHA 🚀';
     if (CATEGORIES.MEME.includes(coin)) category = 'MEME 🐶';
-    if (CATEGORIES.HIGH_VOL.includes(coin)) category = 'HIGH VOL 🔥';
 
-    const msg = `🏦 *V15 PREMIUM SIGNAL* 🏦
+    // صياغة الرسالة الماستر كلاس الإرشادية الجديدة
+    const msg = `🏦 *QUANT FLASH SIGNAL (5m)* 🏦
 ━━━━━━━━━━━━━━━━━━━━
 📊 *القسم:* ${category}
 🪙 *العملة:* ${coin}/USDT
 🎯 *التوجيه:* ${isLong ? 'LONG 📈' : 'SHORT 📉'}
-💰 *سعر الدخول:* \`$${entryPrice.toFixed(4)}\`
-📊 *قوة الصفقة:* \`${score}/100\`
+⚖️ *الرافعة الموصى بها:* \`${position.recommendedLeverage}x\`
+📊 *قوة الفلترة:* \`${score}/100\`
 
-🎯 *TP1:* \`$${tp1.toFixed(4)}\`
-🎯 *TP2:* \`$${tp2.toFixed(4)}\`
-🎯 *TP3:* \`$${tp3.toFixed(4)}\`
-🛑 *SL:* \`$${sl.toFixed(4)}\`
+🧱 *مناطق الدخول (على أجزاء):*
+• دوتة 1 (الآن): \`$${formatPrice(entryPrice1, coin)}\`
+• دوتة 2 (معلق): \`$${formatPrice(entryPrice2, coin)}\`
 
-📊 *إدارة المخاطر:* ${CONFIG.ACCOUNT_RISK_PERCENT}% | حجم: ${position.positionSize} ${coin}
+🎯 *الأهداف التكتيكية:*
+• 🎯 TP1: \`$${formatPrice(tp1, coin)}\`
+• 🎯 TP2: \`$${formatPrice(tp2, coin)}\`
+• 🎯 TP3: \`$${formatPrice(tp3, coin)}\`
 
-🏆 *AI Trading Engine V15.1 PRO*`;
+🛑 *إيقاف الخسارة:* \`$${formatPrice(sl, coin)}\`
+
+⚙️ *إدارة رأس المال:* ريسك ${CONFIG.ACCOUNT_RISK_PERCENT}% | حجم العقد: ${position.positionSize} ${coin}
+⚠️ *تنبيه حماية:* بمجرد ضرب *TP1*، انقل الستوب فوراً إلى سعر الدخول لتأمين الصفقة مجاناً 🛡️
+
+🏆 *AI Flash Sniper Engine V15.5*`;
 
     await sendTelegram(token, TELEGRAM_CHAT_ID, msg);
+    activeSignalsInSession.add(symbol);
 
     if (kv) {
       cooldown[symbol] = Date.now();
@@ -266,15 +283,24 @@ async function processCoin(coin, token, kv) {
   } catch(e) { return null; }
 }
 
-// ========== الماسح الضوئي حسب القسم ==========
-async function marketScanner(token, kv, category = null) {
-  const watchList = category ? CATEGORIES[category] : CATEGORIES[CURRENT_CATEGORY];
-  if (!watchList || watchList.length === 0) {
-    console.log(`❌ القسم ${category || CURRENT_CATEGORY} لا يحتوي على عملات`);
-    return;
+async function marketScanner(token, kv, enforcedCategory = null) {
+  let categoryToScan = enforcedCategory;
+  
+  if (!categoryToScan && kv) {
+    const lastCategory = await kv.get('LAST_SCANNED_CATEGORY') || 'MAJOR';
+    if (lastCategory === 'MAJOR') categoryToScan = 'ALPHA';
+    else if (lastCategory === 'ALPHA') categoryToScan = 'MEME';
+    else categoryToScan = 'MAJOR';
+    
+    await kv.put('LAST_SCANNED_CATEGORY', categoryToScan);
   }
   
-  console.log(`🔍 فحص القسم: ${category || CURRENT_CATEGORY} (${watchList.length} عملة)`);
+  if (!categoryToScan) categoryToScan = 'MAJOR';
+  
+  const watchList = CATEGORIES[categoryToScan];
+  if (!watchList || watchList.length === 0) return;
+  
+  activeSignalsInSession.clear();
   
   for (let i = 0; i < watchList.length; i += CONFIG.BATCH_SIZE) {
     const batch = watchList.slice(i, i + CONFIG.BATCH_SIZE);
@@ -283,7 +309,6 @@ async function marketScanner(token, kv, category = null) {
   }
 }
 
-// ========== جلب الأسعار ==========
 async function getLivePrice(symbol) {
   try {
     const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}USDT`);
@@ -312,14 +337,12 @@ async function getCryptoFearAndGreed() {
   } catch { return "غير متوفر حالياً"; }
 }
 
-// ========== القوائم التفاعلية ==========
 const MENU_KEYBOARD = {
   inline_keyboard: [
     [{ text: "💰 سعر BTC", callback_data: "cmd_btc" }, { text: "💎 سعر ETH", callback_data: "cmd_eth" }],
     [{ text: "🔥 أفضل 5 صعوداً", callback_data: "cmd_top" }, { text: "📊 مؤشر الخوف", callback_data: "cmd_fear" }],
-    [{ text: "🏦 العملات الكبرى", callback_data: "scan_major" }, { text: "🚀 عملات الألفا", callback_data: "scan_alpha" }],
-    [{ text: "🐶 عملات الميم", callback_data: "scan_meme" }, { text: "🔥 فحص الكل", callback_data: "scan_all" }],
-    [{ text: "📈 إحصائيات", callback_data: "cmd_stats" }, { text: "👑 ميزات V15", callback_data: "cmd_about" }]
+    [{ text: "🏦 فحص الكبرى مانيوال", callback_data: "scan_major" }, { text: "🚀 فحص الألفا مانيوال", callback_data: "scan_alpha" }],
+    [{ text: "🐶 فحص الميم مانيوال", callback_data: "scan_meme" }, { text: "📈 الإحصائيات الحالية", callback_data: "cmd_stats" }]
   ]
 };
 
@@ -327,16 +350,16 @@ function getSubscribeKeyboard(inviteLink) {
   return {
     inline_keyboard: [
       [{ text: "📢 انضم للقناة", url: inviteLink || `https://t.me/c/${TELEGRAM_CHAT_ID.replace('-100', '')}` }],
-      [{ text: "✅ تم الانضمام (تفعيل)", callback_data: "check_sub" }]
+      [{ text: "✅ تم الانضمام", callback_data: "check_sub" }]
     ]
   };
 }
 
-// ========== تشغيل الـ Worker ==========
 export default {
   async scheduled(event, env, ctx) {
     const token = env.TELEGRAM_BOT_TOKEN;
-    if (token) ctx.waitUntil(marketScanner(token, env.SIGNALS_KV, 'MAJOR'));
+    const kv = env.SIGNALS_KV;
+    if (token) ctx.waitUntil(marketScanner(token, kv, null));
   },
 
   async fetch(request, env, ctx) {
@@ -348,10 +371,8 @@ export default {
 
     if (url.pathname === '/' || url.pathname === '/dashboard') {
       let stats = JSON.parse(await kv?.get('STATS') || '{"total":0}');
-      return new Response(`<h1>🏦 V15.1 ENGINE ACTIVE</h1>
-<p>Total Signals: ${stats.total}</p>
-<p>Categories: MAJOR(${CATEGORIES.MAJOR.length}) | ALPHA(${CATEGORIES.ALPHA.length}) | MEME(${CATEGORIES.MEME.length})</p>`, 
-      { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+      let lastCat = await kv?.get('LAST_SCANNED_CATEGORY') || 'None';
+      return new Response(`<h1>🏦 V15.5 MASTER-CLASS ACTIVE</h1><p>Signals Dispatched: ${stats.total}</p>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
     if (url.pathname === '/webhook' && request.method === 'POST') {
@@ -367,35 +388,23 @@ export default {
           if (data === "check_sub") {
             const isSubbed = await checkChannelSubscription(token, userId);
             if (isSubbed) {
-              await sendTelegram(token, chatId, `🎉 *تم التفعيل!*\nاختر القسم لبدء الفحص:`, MENU_KEYBOARD);
-            } else {
-              await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-                method: 'POST',
-                body: JSON.stringify({ callback_query_id: cb.id, text: "❌ غير مشترك!", show_alert: true })
-              });
+              await sendTelegram(token, chatId, `🎉 *تم التفعيل! المحرك الماستر كلاس V15.5 شغال الآن تلقائياً.*`, MENU_KEYBOARD);
             }
             return new Response('OK');
           }
 
           const isSubbed = await checkChannelSubscription(token, userId);
-          if (!isSubbed) {
-            await sendTelegram(token, chatId, `⚠️ اشترك أولاً!`, getSubscribeKeyboard(env.CHANNEL_INVITE_LINK));
-            return new Response('OK');
-          }
+          if (!isSubbed) return new Response('OK');
 
-          // أوامر المسح حسب القسم
           if (data === 'scan_major') {
-            await sendTelegram(token, chatId, `🔍 جاري فحص العملات الكبرى (${CATEGORIES.MAJOR.length} عملة)...`);
+            await sendTelegram(token, chatId, `🔍 فحص مانيوال طارئ للعملات الكبرى...`);
             ctx.waitUntil(marketScanner(token, kv, 'MAJOR'));
           } else if (data === 'scan_alpha') {
-            await sendTelegram(token, chatId, `🚀 جاري فحص عملات الألفا (${CATEGORIES.ALPHA.length} عملة)...`);
+            await sendTelegram(token, chatId, `🚀 فحص مانيوال طارئ لعملات الألفا...`);
             ctx.waitUntil(marketScanner(token, kv, 'ALPHA'));
           } else if (data === 'scan_meme') {
-            await sendTelegram(token, chatId, `🐶 جاري فحص عملات الميم (${CATEGORIES.MEME.length} عملة)...`);
+            await sendTelegram(token, chatId, `🐶 فحص مانيوال طارئ لعملات الميم...`);
             ctx.waitUntil(marketScanner(token, kv, 'MEME'));
-          } else if (data === 'scan_all') {
-            await sendTelegram(token, chatId, `🎯 جاري الفحص الشامل (${CATEGORIES.ALL.length} عملة)...`);
-            ctx.waitUntil(marketScanner(token, kv, 'ALL'));
           } else if (data === 'cmd_btc') {
             const p = await getLivePrice('BTC');
             await sendTelegram(token, chatId, `💰 *BTC:* \`$${p?.toLocaleString()}\``);
@@ -411,8 +420,6 @@ export default {
           } else if (data === 'cmd_stats') {
             let stats = JSON.parse(await kv?.get('STATS') || '{"total":0}');
             await sendTelegram(token, chatId, `📊 *الإحصائيات*\nإجمالي الإشارات: ${stats.total}`);
-          } else if (data === 'cmd_about') {
-            await sendTelegram(token, chatId, `👑 *V15.1 PRO*\n• 4 أقسام: كبرى/ألفا/ميم/الكل\n• ${CATEGORIES.ALL.length} عملة\n• Threshold 75 | Base 20`);
           }
 
           await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, { method: 'POST', body: JSON.stringify({ callback_query_id: cb.id }) });
@@ -430,7 +437,7 @@ export default {
               await sendTelegram(token, chatId, `⚠️ اشترك أولاً!`, getSubscribeKeyboard(env.CHANNEL_INVITE_LINK));
               return new Response('OK');
             }
-            await sendTelegram(token, chatId, `🏦 *V15.1 PRO* 🏦\n━━━━━━━━━━━━━━━━━━━━━\n📊 *الأقسام المتاحة:*\n• 🏦 كبرى (${CATEGORIES.MAJOR.length})\n• 🚀 ألفا (${CATEGORIES.ALPHA.length})\n• 🐶 ميم (${CATEGORIES.MEME.length})\n\nاختر من الأزرار`, MENU_KEYBOARD);
+            await sendTelegram(token, chatId, `🏦 *TRADING AI V15.5 QUANT PRO* 🏦\n━━━━━━━━━━━━━━━━━━━━━\nتم تفعيل الـ 5m ونظام الدخول المجزأ والـ Leverage الذكي الموصى به.`, MENU_KEYBOARD);
             return new Response('OK');
           }
         }
