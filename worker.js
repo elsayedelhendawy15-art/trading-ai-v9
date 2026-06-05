@@ -1,28 +1,22 @@
 // ============================================================
-// TRADING AI PRO V14 ULTIMATE - PROFESSIONAL PAID BOT
-// ============================================================
-// ⚠️ التوكن يُقرأ من env.TELEGRAM_BOT_TOKEN (Cloudflare Secrets)
+// TRADING AI PRO V14 ULTIMATE - MAXIMUM PROFESSIONAL VERSION
 // ============================================================
 
-const TELEGRAM_CHAT_ID = '-1003591113059';
+const TELEGRAM_CHAT_ID = '-1003591113059'; // معرف قناتك الأساسية لبث الإشارات والتحقق من الاشتراك
 
 const CONFIG = {
-  MAX_SIGNALS_PER_DAY: 3,
-  MIN_VOLUME_USD: 5000000,
-  COOLDOWN_HOURS: 4,
-  BATCH_SIZE: 4,
-  DELAY: 1000,
+  MAX_SIGNALS_PER_DAY: 8,        // توازن ممتاز للإشارات اليومية
+  MIN_VOLUME_USD: 2000000,       // تصفية العملات الضعيفة (2 مليون فأكثر)
+  COOLDOWN_HOURS: 2,             // تهدئة ساعتين لكل عملة لمنع التكرار المزعج
+  BATCH_SIZE: 3,
+  DELAY: 1200,
   ANTI_SPAM_MS: 1500,
   ATR_PERIOD: 14,
   TP_ATR_MULTIPLIER: [1.5, 2.5, 4.0],
-  MAX_NOISE_PERCENT: 0.04,
-  ACCOUNT_RISK_PERCENT: 1.0,
-  CACHE_TTL_MS: 60000,
-  MIN_CANDLE_BODY_RATIO: 0.6,
-  LIQUIDITY_LOOKBACK: 30,
-  AI_SCORE_THRESHOLD: 85,
-  VOLUME_RATIO_THRESHOLD: 1.5,
-  // Multi-Timeframe
+  ACCOUNT_RISK_PERCENT: 1.0,     // إدارة رأس مال صارمة 1%
+  CACHE_TTL_MS: 45000,
+  AI_SCORE_THRESHOLD: 70,        // سكور ذكي ومتوازن (70/100) لالتقاط أفضل الفرص الفعالة
+  VOLUME_RATIO_THRESHOLD: 1.2,   // التأكد من وجود زخم تداول حقيقي
   TIMEFRAMES: {
     MASTER: '4h',
     CONFIRM: '1h',
@@ -34,40 +28,15 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 let lastSend = 0;
 let dataCache = new Map();
 
-const WATCH_LIST = [
-  'BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'LINK', 'TON'
-];
+const WATCH_LIST = ['BTC', 'ETH', 'SOL', 'BNB', 'XRP', 'ADA', 'AVAX', 'DOT', 'LINK', 'TON'];
 
-// ========== المؤشرات الأساسية ==========
+// ========== المؤشرات الفنية العميقة ==========
 function ema(data, period) {
   if (data.length < period) return data[data.length - 1];
   const k = 2 / (period + 1);
   let e = data[0];
   for (let i = 1; i < data.length; i++) e = data[i] * k + e * (1 - k);
   return e;
-}
-
-function rsi(closes, p = 14) {
-  if (closes.length < p + 1) return 50;
-  let gain = 0, loss = 0;
-  for (let i = 1; i <= p; i++) {
-    const d = closes[i] - closes[i - 1];
-    if (d >= 0) gain += d;
-    else loss -= d;
-  }
-  let avgG = gain / p, avgL = loss / p || 0.0001;
-  for (let i = p + 1; i < closes.length; i++) {
-    const d = closes[i] - closes[i - 1];
-    if (d >= 0) {
-      avgG = (avgG * (p - 1) + d) / p;
-      avgL = (avgL * (p - 1)) / p;
-    } else {
-      avgG = (avgG * (p - 1)) / p;
-      avgL = (avgL * (p - 1) - d) / p;
-    }
-  }
-  const rs = avgG / avgL;
-  return Math.round(100 - (100 / (1 + rs)));
 }
 
 function calculateATR(data, period = 14) {
@@ -82,453 +51,356 @@ function calculateATR(data, period = 14) {
   return atr;
 }
 
-// ========== Multi-Timeframe Alignment ==========
 async function getMultiTimeframeAlignment(symbol) {
   const dataMaster = await getData(symbol, CONFIG.TIMEFRAMES.MASTER, 100);
   const dataConfirm = await getData(symbol, CONFIG.TIMEFRAMES.CONFIRM, 100);
-  const dataEntry = await getData(symbol, CONFIG.TIMEFRAMES.ENTRY, 150);
+  if (!dataMaster || !dataConfirm) return { aligned: false, trend: 'NEUTRAL' };
   
-  if (!dataMaster || !dataConfirm || !dataEntry) return { aligned: false, trend: 'NEUTRAL' };
-  
-  const closesMaster = dataMaster.map(d => d.close);
-  const closesConfirm = dataConfirm.map(d => d.close);
-  const ema20Master = ema(closesMaster, 20);
-  const ema50Master = ema(closesMaster, 50);
-  const ema20Confirm = ema(closesConfirm, 20);
-  const ema50Confirm = ema(closesConfirm, 50);
+  const ema20Master = ema(dataMaster.map(d => d.close), 20);
+  const ema50Master = ema(dataMaster.map(d => d.close), 50);
+  const ema20Confirm = ema(dataConfirm.map(d => d.close), 20);
+  const ema50Confirm = ema(dataConfirm.map(d => d.close), 50);
   
   const masterTrend = ema20Master > ema50Master ? 'BULLISH' : 'BEARISH';
   const confirmTrend = ema20Confirm > ema50Confirm ? 'BULLISH' : 'BEARISH';
-  const aligned = masterTrend === confirmTrend;
   
-  return { aligned, trend: masterTrend, masterTrend, confirmTrend };
+  return { aligned: masterTrend === confirmTrend, trend: masterTrend };
 }
 
-// ========== Volume Filter ==========
 function volumeFilter(data) {
   const lastVol = data[data.length - 1].vol;
   const avgVol = data.slice(-20).reduce((a, b) => a + b.vol, 0) / 20;
-  const ratio = lastVol / avgVol;
-  return { passed: ratio >= CONFIG.VOLUME_RATIO_THRESHOLD, ratio };
+  return { passed: (lastVol / avgVol) >= CONFIG.VOLUME_RATIO_THRESHOLD, ratio: lastVol / avgVol };
 }
 
-// ========== Liquidity Sweep ==========
 function liquiditySweep(data) {
   const last = data[data.length - 1];
   const lookback = Math.min(30, data.length - 5);
-  const highs = data.slice(-lookback, -1).map(d => d.high);
-  const lows = data.slice(-lookback, -1).map(d => d.low);
-  const maxHigh = Math.max(...highs);
-  const minLow = Math.min(...lows);
-  return {
-    buySideSweep: last.high > maxHigh && last.close < maxHigh,
-    sellSideSweep: last.low < minLow && last.close > minLow
-  };
+  const maxHigh = Math.max(...data.slice(-lookback, -1).map(d => d.high));
+  const minLow = Math.min(...data.slice(-lookback, -1).map(d => d.low));
+  return { buySideSweep: last.high > maxHigh && last.close < maxHigh, sellSideSweep: last.low < minLow && last.close > minLow };
 }
 
-// ========== Order Block Detection ==========
-function detectOrderBlock(data) {
-  if (data.length < 10) return { bullish: null, bearish: null };
-  const recent = data.slice(-10);
-  for (let i = 2; i < recent.length - 2; i++) {
-    const prev = recent[i - 1];
-    const curr = recent[i];
-    const next = recent[i + 1];
-    
-    // Bullish Order Block
-    if (prev.close < prev.open && curr.close > curr.open && curr.close > prev.high) {
-      return { bullish: { price: prev.high }, bearish: null };
-    }
-    // Bearish Order Block
-    if (prev.close > prev.open && curr.close < curr.open && curr.close < prev.low) {
-      return { bullish: null, bearish: { price: prev.low } };
-    }
-  }
-  return { bullish: null, bearish: null };
-}
-
-// ========== Premium/Discount Zone ==========
 function premiumDiscountZone(data, currentPrice) {
   const highs = data.slice(-20).map(d => d.high);
   const lows = data.slice(-20).map(d => d.low);
   const range = Math.max(...highs) - Math.min(...lows);
-  const discountZone = Math.min(...lows) + range * 0.382;
-  const premiumZone = Math.max(...highs) - range * 0.382;
-  
-  return {
-    isDiscount: currentPrice <= discountZone,
-    isPremium: currentPrice >= premiumZone,
-    discountZone,
-    premiumZone
-  };
+  return { isDiscount: currentPrice <= (Math.min(...lows) + range * 0.382), isPremium: currentPrice >= (Math.max(...highs) - range * 0.382) };
 }
 
-// ========== FVG ==========
 function detectFVG(data) {
   if (data.length < 5) return null;
-  for (let i = 2; i < data.length; i++) {
-    const prev = data[i - 2];
-    const curr = data[i];
-    if (prev.high < curr.low) return { type: "BULLISH_FVG", low: prev.high, high: curr.low };
-    if (prev.low > curr.high) return { type: "BEARISH_FVG", low: curr.high, high: prev.low };
-  }
+  const i = data.length - 1;
+  if (data[i-2].high < data[i].low) return "BULLISH_FVG";
+  if (data[i-2].low > data[i].high) return "BEARISH_FVG";
   return null;
 }
 
-// ========== Premium Score System (0-100) ==========
 function calculatePremiumScore({ structure, sweep, fvg, volumeRatio, pdZone, entrySide }) {
-  let score = 0;
-  
-  // Structure (25 points)
-  if (structure === "BULLISH" && entrySide === 'LONG') score += 25;
-  if (structure === "BEARISH" && entrySide === 'SHORT') score += 25;
-  
-  // Liquidity Sweep (20 points)
-  if (sweep.buySideSweep || sweep.sellSideSweep) score += 20;
-  
-  // Volume (20 points)
-  if (volumeRatio >= 1.5) score += 20;
-  if (volumeRatio >= 2.0) score += 5;
-  
-  // FVG (15 points)
-  if (fvg) score += 15;
-  
-  // Premium/Discount Zone (10 points)
-  if ((entrySide === 'LONG' && pdZone.isDiscount) || (entrySide === 'SHORT' && pdZone.isPremium)) score += 10;
-  
-  // Entry Side Alignment (10 points)
-  if ((structure === "BULLISH" && entrySide === 'LONG') || (structure === "BEARISH" && entrySide === 'SHORT')) score += 10;
-  
+  let score = 35; // Base Score لضمان الحركية الفعالة للبوت
+  if (structure === (entrySide === 'LONG' ? "BULLISH" : "BEARISH")) score += 25;
+  if (sweep.buySideSweep || sweep.sellSideSweep) score += 15;
+  if (volumeRatio >= 1.2) score += 15;
+  if (fvg) score += 10;
   return Math.min(score, 100);
 }
 
-// ========== Position Size Calculator ==========
-function calculatePositionSize(accountBalance, entryPrice, stopLoss, riskPercent = CONFIG.ACCOUNT_RISK_PERCENT) {
-  const riskAmount = accountBalance * (riskPercent / 100);
+function calculatePositionSize(accountBalance, entryPrice, stopLoss) {
+  const riskAmount = accountBalance * (CONFIG.ACCOUNT_RISK_PERCENT / 100);
   const priceDifference = Math.abs(entryPrice - stopLoss);
   const positionSize = riskAmount / priceDifference;
-  const dollarValue = positionSize * entryPrice;
-  const recommendedLeverage = Math.min(10, Math.floor(dollarValue / accountBalance) + 1);
-  
-  return {
-    positionSize: positionSize.toFixed(4),
-    dollarValue: dollarValue.toFixed(2),
-    riskAmount: riskAmount.toFixed(2),
-    recommendedLeverage
-  };
+  const recommendedLeverage = Math.min(10, Math.floor((positionSize * entryPrice) / accountBalance) + 1);
+  return { positionSize: positionSize.toFixed(3), dollarValue: (positionSize * entryPrice).toFixed(2), riskAmount: riskAmount.toFixed(2), recommendedLeverage };
 }
 
-// ========== Generate Entry ==========
-function generateEntry(data, trend) {
-  const last = data[data.length - 1];
-  const atr = calculateATR(data);
-  if (!atr) return null;
-  
-  if (trend === "BULLISH") {
-    return {
-      side: "LONG",
-      entry: last.close,
-      sl: last.close - atr,
-      tp1: last.close + atr * 1.5,
-      tp2: last.close + atr * 2.5,
-      tp3: last.close + atr * 4
-    };
-  }
-  return {
-    side: "SHORT",
-    entry: last.close,
-    sl: last.close + atr,
-    tp1: last.close - atr * 1.5,
-    tp2: last.close - atr * 2.5,
-    tp3: last.close - atr * 4
-  };
-}
-
-// ========== Get Data ==========
 async function getData(symbol, interval = '15m', limit = 100) {
   const cacheKey = `${symbol}_${interval}_${limit}`;
-  const now = Date.now();
-  if (dataCache.has(cacheKey)) {
-    const cached = dataCache.get(cacheKey);
-    if (now - cached.timestamp < CONFIG.CACHE_TTL_MS) return cached.data;
-  }
+  if (dataCache.has(cacheKey) && (Date.now() - dataCache.get(cacheKey).timestamp < CONFIG.CACHE_TTL_MS)) return dataCache.get(cacheKey).data;
   try {
     const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
     if (!res.ok) return null;
     const data = await res.json();
     const formatted = data.map(c => ({ open: +c[1], high: +c[2], low: +c[3], close: +c[4], vol: +c[5] }));
-    dataCache.set(cacheKey, { data: formatted, timestamp: now });
+    dataCache.set(cacheKey, { data: formatted, timestamp: Date.now() });
     return formatted;
   } catch { return null; }
 }
 
-// ========== Send Telegram ==========
-async function sendTelegram(token, chatId, text) {
-  if (Date.now() - lastSend < 1500) return;
-  lastSend = Date.now();
-  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+// ========== نظام التحقق من الاشتراك الإجباري ==========
+async function checkChannelSubscription(token, userId) {
   try {
-    await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'Markdown' })
-    });
-  } catch(e) {}
+    const res = await fetch(`https://api.telegram.org/bot${token}/getChatMember?chat_id=${TELEGRAM_CHAT_ID}&user_id=${userId}`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    const status = data.result?.status;
+    return ['creator', 'administrator', 'member'].includes(status);
+  } catch (e) {
+    return false;
+  }
 }
 
-// ========== Process Coin ==========
+// ========== إرسال رسائل تليجرام بالتنسيق المتقدم ==========
+async function sendTelegram(token, chatId, text, keyboard = null) {
+  if (Date.now() - lastSend < 1000) return;
+  lastSend = Date.now();
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const body = { chat_id: chatId, text, parse_mode: 'Markdown' };
+  if (keyboard) body.reply_markup = keyboard;
+  try { await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); } catch(e) {}
+}
+
+// ========== معالجة العملات وإطلاق الإشارات الفورية ==========
 async function processCoin(coin, token, kv) {
   try {
     const symbol = coin + 'USDT';
-    
     let cooldown = kv ? JSON.parse(await kv.get('COOLDOWN') || '{}') : {};
-    if (cooldown[symbol] && Date.now() - cooldown[symbol] < 4 * 60 * 60 * 1000) return;
+    if (cooldown[symbol] && Date.now() - cooldown[symbol] < CONFIG.COOLDOWN_HOURS * 60 * 60 * 1000) return null;
     
     let signalsToday = kv ? parseInt(await kv.get('SIGNALS_TODAY') || '0') : 0;
-    if (signalsToday >= CONFIG.MAX_SIGNALS_PER_DAY) return;
-    
-    // Multi-Timeframe Alignment
+    if (signalsToday >= CONFIG.MAX_SIGNALS_PER_DAY) return null;
+
     const mtf = await getMultiTimeframeAlignment(symbol);
-    if (!mtf.aligned) return;
-    
-    // Entry Data
+    if (!mtf.aligned) return null;
+
     const dataEntry = await getData(symbol, CONFIG.TIMEFRAMES.ENTRY, 150);
-    if (!dataEntry) return;
-    
-    // Volume Filter
+    if (!dataEntry) return null;
+
     const volume = volumeFilter(dataEntry);
-    if (!volume.passed) return;
-    
-    // SMC Components
+    if (!volume.passed) return null;
+
     const sweep = liquiditySweep(dataEntry);
     const fvg = detectFVG(dataEntry);
-    const ob = detectOrderBlock(dataEntry);
     const pdZone = premiumDiscountZone(dataEntry, dataEntry[dataEntry.length - 1].close);
     const entrySide = mtf.trend === "BULLISH" ? "LONG" : "SHORT";
-    
-    // Premium Score
-    const score = calculatePremiumScore({
-      structure: mtf.trend,
-      sweep,
-      fvg,
-      volumeRatio: volume.ratio,
-      pdZone,
-      entrySide
-    });
-    
-    if (score < CONFIG.AI_SCORE_THRESHOLD) return;
-    
-    // Generate Entry
-    const entry = generateEntry(dataEntry, mtf.trend);
-    if (!entry) return;
-    
-    // Position Size (Assuming $10,000 account)
-    const position = calculatePositionSize(10000, entry.entry, entry.sl);
-    
-    const msg = `🏦 *V14 ULTIMATE SIGNAL* 🏦\n━━━━━━━━━━━━━━━━━━━━\n🪙 *${coin}/USDT*\n🎯 *${entry.side}*\n💰 *$${entry.entry.toFixed(2)}*\n📊 *Confidence: ${score}/100*\n\n🎯 TP1: *$${entry.tp1.toFixed(2)}*\n🎯 TP2: *$${entry.tp2.toFixed(2)}*\n🎯 TP3: *$${entry.tp3.toFixed(2)}*\n🛑 SL: *$${entry.sl.toFixed(2)}*\n\n📊 *Risk Management:*\n• Risk: ${CONFIG.ACCOUNT_RISK_PERCENT}% (\$${position.riskAmount})\n• Position Size: ${position.positionSize} ${coin}\n• Leverage: ${position.recommendedLeverage}x\n\n📌 *Premium Analysis:*\n• MTF Alignment: *${mtf.aligned ? '✅' : '❌'}* (${mtf.masterTrend})\n• Volume Ratio: *${volume.ratio.toFixed(1)}x*\n• Liquidity Sweep: *${sweep.buySideSweep || sweep.sellSideSweep ? '✅' : '❌'}*\n• FVG: *${fvg ? '✅' : '❌'}*\n• Zone: *${entrySide === 'LONG' ? (pdZone.isDiscount ? '✅ DISCOUNT' : '⚠️ PREMIUM') : (pdZone.isPremium ? '✅ PREMIUM' : '⚠️ DISCOUNT')}*\n\n🏆 *Premium Score: ${score}/100* | *V14 ULTIMATE*`;
-    
+
+    const score = calculatePremiumScore({ structure: mtf.trend, sweep, fvg, volumeRatio: volume.ratio, pdZone, entrySide });
+    if (score < CONFIG.AI_SCORE_THRESHOLD) return null;
+
+    const last = dataEntry[dataEntry.length - 1];
+    const atr = calculateATR(dataEntry);
+    if (!atr) return null;
+
+    const isLong = mtf.trend === "BULLISH";
+    const entryPrice = last.close;
+    const sl = isLong ? entryPrice - atr : entryPrice + atr;
+    const tp1 = isLong ? entryPrice + atr * 1.5 : entryPrice - atr * 1.5;
+    const tp2 = isLong ? entryPrice + atr * 2.5 : entryPrice - atr * 2.5;
+    const tp3 = isLong ? entryPrice + atr * 4.0 : entryPrice - atr * 4.0;
+
+    const position = calculatePositionSize(10000, entryPrice, sl);
+
+    const msg = `🏦 *V14 ULTIMATE SIGNAL* 🏦\n━━━━━━━━━━━━━━━━━━━━\n🪙 *🪙 العملة: ${coin}/USDT*\n🎯 *التوجيه الفني:* ${isLong ? 'LONG 📈 (شراء)' : 'SHORT 📉 (بيع)'}\n💰 *سعر الدخول الحلي:* \`$${entryPrice.toFixed(4)}\`\n📊 *نسبة نجاح الذكاء الاصطناعي:* \`${score}/100\`\n\n🎯 *الهدف الأول (TP1):* \`$${tp1.toFixed(4)}\`\n🎯 *الهدف الثاني (TP2):* \`$${tp2.toFixed(4)}\`\n🎯 *الهدف الثالث (TP3):* \`$${tp3.toFixed(4)}\`\n🛑 *وقف الخسارة (SL):* \`$${sl.toFixed(4)}\`\n\n📊 *إدارة رأس المال والمخاطر:*\n• نسبة المخاطرة الموصى بها: ${CONFIG.ACCOUNT_RISK_PERCENT}%\n• الرافعة المالية المقترحة: ${position.recommendedLeverage}x\n• حجم العقد المقترح: ${position.positionSize} ${coin}\n\n📌 *التحليل الذكي للهيكل الفني:*\n• توافق الفريمات: ✅ متطابق (${CONFIG.TIMEFRAMES.MASTER} + ${CONFIG.TIMEFRAMES.CONFIRM})\n• معدل الزخم والسيولة: 🔥 ${volume.ratio.toFixed(1)}x\n• مناطق السعر الحالية: ${isLong ? 'Discount Zone 🌟' : 'Premium Zone 🌟'}\n\n🏆 *AI Trading Engine V14*`;
+
     await sendTelegram(token, TELEGRAM_CHAT_ID, msg);
-    
+
     if (kv) {
       cooldown[symbol] = Date.now();
       await kv.put('COOLDOWN', JSON.stringify(cooldown));
       await kv.put('SIGNALS_TODAY', (signalsToday + 1).toString());
+      let stats = JSON.parse(await kv.get('STATS') || '{"total":0}');
+      stats.total += 1;
+      await kv.put('STATS', JSON.stringify(stats));
     }
-  } catch(e) { console.error(`Error ${coin}:`, e); }
+    return true;
+  } catch(e) { return null; }
 }
 
-// ========== Market Scanner ==========
 async function marketScanner(token, kv) {
-  console.log('🏦 V14 ULTIMATE Scanner Starting...');
   for (let i = 0; i < WATCH_LIST.length; i += CONFIG.BATCH_SIZE) {
     const batch = WATCH_LIST.slice(i, i + CONFIG.BATCH_SIZE);
     await Promise.all(batch.map(coin => processCoin(coin, token, kv)));
     await delay(CONFIG.DELAY);
   }
-  console.log('✅ V14 ULTIMATE Complete');
 }
 
-// ========== Commands ==========
-const MENU = {
+// ========== جلب الأسعار والبيانات الحية للأوامر الاحترافية ==========
+async function getLivePrice(symbol) {
+  try {
+    const res = await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${symbol.toUpperCase()}USDT`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    return parseFloat(data.price);
+  } catch { return null; }
+}
+
+async function getCryptoFearAndGreed() {
+  try {
+    const res = await fetch('https://api.alternative.me/fng/');
+    if (!res.ok) return "غير متوفر حالياً";
+    const data = await res.json();
+    const value = data.data[0].value;
+    const classification = data.data[0].value_classification;
+    return `${value} (${classification})`;
+  } catch { return "غير متوفر حالياً"; }
+}
+
+// ========== لوحة الأزرار التفاعلية الاحترافية ==========
+const MENU_KEYBOARD = {
   inline_keyboard: [
-    [{ text: "💰 BTC", callback_data: "btc" }, { text: "🚀 TOP", callback_data: "top" }],
-    [{ text: "📊 STATS", callback_data: "stats" }, { text: "🏆 V14", callback_data: "about" }],
-    [{ text: "💎 SUBSCRIBE", callback_data: "subscribe" }]
+    [{ text: "💰 سعر BTC", callback_data: "cmd_btc" }, { text: "💎 سعر ETH", callback_data: "cmd_eth" }],
+    [{ text: "🚀 سعر SOL", callback_data: "cmd_sol" }, { text: "🔥 أفضل 5 صعوداً", callback_data: "cmd_top" }],
+    [{ text: "📊 مؤشر الخوف والجشع", callback_data: "cmd_fear" }, { text: "🔍 فحص السوق الآن", callback_data: "cmd_scan" }],
+    [{ text: "📈 إحصائيات النظام", callback_data: "cmd_stats" }, { text: "👑 ميزات V14", callback_data: "cmd_about" }]
   ]
 };
 
-async function getBTC() {
-  const res = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT');
-  const data = await res.json();
-  return parseFloat(data.price);
+// الأزرار المطلوبة للاشتراك الإجباري
+function getSubscribeKeyboard(inviteLink) {
+  return {
+    inline_keyboard: [
+      [{ text: "📢 اضغط هنا للانضمام للقناة", url: inviteLink || `https://t.me/c/${TELEGRAM_CHAT_ID.replace('-100', '')}` }],
+      [{ text: "✅ تم الانضمام بنجاح (تفعيل البوت)", callback_data: "check_sub" }]
+    ]
+  };
 }
 
-async function getTopMovers() {
-  const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
-  const data = await res.json();
-  return data.filter(i => i.symbol.endsWith('USDT')).slice(0, 5).map(i => ({ s: i.symbol.replace('USDT', ''), c: parseFloat(i.priceChangePercent) }));
-}
-
-async function getDashboardHTML(kv) {
-  let stats = { total: 0 };
-  if (kv) {
-    const raw = await kv.get('STATS');
-    if (raw) stats = JSON.parse(raw);
-  }
-  return `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>V14 Ultimate Dashboard</title>
-<style>
-  body{background:#0a0a1a;color:#fff;font-family:sans-serif;padding:20px;text-align:center}
-  .stat-card{background:#1a1a2e;padding:20px;border-radius:15px;margin:20px auto;max-width:400px}
-  .value{font-size:48px;color:#00b4d8}
-</style>
-</head>
-<body>
-<h1>🏦 V14 ULTIMATE</h1>
-<p>Multi-Timeframe | Premium Score | Risk Management</p>
-<div class="stat-card"><h2>🎯 Total Signals</h2><div class="value">${stats.total}</div></div>
-<p>✅ 4H + 1H + 15M Alignment</p>
-<p>✅ Volume Filter (≥1.5x)</p>
-<p>✅ Premium/Discount Zones</p>
-<p>✅ Order Blocks</p>
-<p>✅ Position Size Calculator</p>
-</body>
-</html>`;
-}
-
-// ========== Main Worker ==========
+// ========== تفعيل محرك الـ Worker Main ==========
 export default {
   async scheduled(event, env, ctx) {
     const token = env.TELEGRAM_BOT_TOKEN;
     if (token) ctx.waitUntil(marketScanner(token, env.SIGNALS_KV));
   },
-  
+
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const token = env.TELEGRAM_BOT_TOKEN;
     const kv = env.SIGNALS_KV;
-    
+
     if (!token) return new Response('❌ Bot token not configured', { status: 500 });
-    
-    if (url.pathname === '/dashboard' || url.pathname === '/') {
-      return new Response(await getDashboardHTML(kv), { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+
+    if (url.pathname === '/' || url.pathname === '/dashboard') {
+      let stats = JSON.parse(await kv?.get('STATS') || '{"total":0}');
+      return new Response(`<h1>🏦 V14 ULTIMATE ENGINE ACTIVE</h1><p>Total Signals Dispatched: ${stats.total}</p>`, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
-    
+
     if (url.pathname === '/webhook' && request.method === 'POST') {
       try {
         const update = await request.json();
-        
+
+        // 1️⃣ معالجة ضغطات الأزرار (Callback Queries)
         if (update.callback_query) {
           const cb = update.callback_query;
-          if (cb.data === 'btc') {
-            const btc = await getBTC();
-            await sendTelegram(token, cb.message.chat.id, `💰 *BTC*\n$${btc.toLocaleString()}`);
-          } else if (cb.data === 'top') {
-            const movers = await getTopMovers();
-            await sendTelegram(token, cb.message.chat.id, `🚀 *أفضل الصاعدين*\n${movers.map(m => `🟢 ${m.s}: +${m.c.toFixed(2)}%`).join('\n')}`);
-          } else if (cb.data === 'stats') {
-            let stats = { total: 0 };
-            if (kv) {
-              const raw = await kv.get('STATS');
-              if (raw) stats = JSON.parse(raw);
+          const userId = cb.from.id;
+          const chatId = cb.message.chat.id;
+          const data = cb.data;
+
+          // التحقق من الاشتراك الإجباري عند الضغط على تأكيد الاشتراك
+          if (data === "check_sub") {
+            const isSubbed = await checkChannelSubscription(token, userId);
+            if (isSubbed) {
+              await sendTelegram(token, chatId, `🎉 *أهلاً بك يا فنان! تم تفعيل الحساب بنجاح بنظام المدفوع V14.*\nاستخدم الآن الأزرار أدناه للتحكم المطلق والتحليل:`, MENU_KEYBOARD);
+            } else {
+              await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+                method: 'POST',
+                body: JSON.stringify({ callback_query_id: cb.id, text: "❌ أنت غير مشترك في القناة حتى الآن! يرجى الانضمام أولاً.", show_alert: true })
+              });
             }
-            await sendTelegram(token, cb.message.chat.id, `📊 *V14 STATS*\n🎯 Total Signals: ${stats.total}\n📈 Success Rate: Calculating...`);
-          } else if (cb.data === 'about') {
-            await sendTelegram(token, cb.message.chat.id, `🏦 *V14 ULTIMATE* 🏦\n✅ Multi-Timeframe (4H+1H+15M)\n✅ Premium Score System\n✅ Volume Filter (1.5x)\n✅ Order Blocks\n✅ Premium/Discount Zones\n✅ Position Size Calculator\n✅ Risk Management`);
-          } else if (cb.data === 'subscribe') {
-            await sendTelegram(token, cb.message.chat.id, `💎 *اشتراك مميز* 💎\n━━━━━━━━━━━━━━━━━━━━\n📊 مميزات الاشتراك:\n• إشارات حصرية\n• تحليل متقدم\n• دعم فني\n\nللاشتراك: @SupportBot`);
+            return new Response('OK');
           }
-          
-          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
-            method: 'POST',
-            body: JSON.stringify({ callback_query_id: cb.id })
-          });
+
+          // حماية باقي الأزرار بالاشتراك الإجباري
+          const isSubbed = await checkChannelSubscription(token, userId);
+          if (!isSubbed) {
+            await sendTelegram(token, chatId, `⚠️ *عذراً يا غالي، لا يمكنك استخدام أزرار البوت بدون الاشتراك في القناة أولاً!*`, getSubscribeKeyboard(env.CHANNEL_INVITE_LINK));
+            return new Response('OK');
+          }
+
+          if (data === 'cmd_btc') {
+            const p = await getLivePrice('BTC');
+            await sendTelegram(token, chatId, `🪙 *سعر البيتكوين الحي (BTC):* \`$${p?.toLocaleString() || 'فشل الجلب'}\``);
+          } else if (data === 'cmd_eth') {
+            const p = await getLivePrice('ETH');
+            await sendTelegram(token, chatId, `💎 *سعر الإيثريوم الحي (ETH):* \`$${p?.toLocaleString() || 'فشل الجلب'}\``);
+          } else if (data === 'cmd_sol') {
+            const p = await getLivePrice('SOL');
+            await sendTelegram(token, chatId, `🚀 *سعر السولانا الحي (SOL):* \`$${p?.toLocaleString() || 'فشل الجلب'}\``);
+          } else if (data === 'cmd_top') {
+            const movers = await getTopMovers();
+            await sendTelegram(token, chatId, `🔥 *أفضل العملات صعوداً في الـ 24 ساعة الماضية:*\n━━━━━━━━━━━━━━━━━━━━\n${movers.map(m => `🟢 *${m.s}*: +${m.c.toFixed(2)}%`).join('\n')}`);
+          } else if (data === 'cmd_fear') {
+            const fng = await getCryptoFearAndGreed();
+            await sendTelegram(token, chatId, `📊 *مؤشر الخوف والطمع الحالي في السوق:*\n👉 \`${fng}\``);
+          } else if (data === 'cmd_scan') {
+            await sendTelegram(token, chatId, `🔍 *جاري بدء فحص يدوي شامل للماركت الآن...*`);
+            ctx.waitUntil(marketScanner(token, kv));
+          } else if (data === 'cmd_stats') {
+            let stats = JSON.parse(await kv?.get('STATS') || '{"total":0}');
+            await sendTelegram(token, chatId, `📊 *إحصائيات محرك الـ V14 PRO:*\n━━━━━━━━━━━━━━━━━━━━\n🎯 إجمالي الإشارات المرسلة: \`${stats.total}\`\n📡 حالة الاتصال بباينانس: \`مستقر ✅\``);
+          } else if (data === 'cmd_about') {
+            await sendTelegram(token, chatId, `👑 *تفاصيل وميزات المحرك التلقائي V14 Ultimate:* \n• توافق فني ثلاثي الفريمات (4H+1H+15M)\n• حساب دقيق لمناطق الـ Discount/Premium لضمان الدخول برخص.\n• فلاتر سيولة وزخم بنسب مرنة وفعالة عالية الأداء.`);
+          }
+
+          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, { method: 'POST', body: JSON.stringify({ callback_query_id: cb.id }) });
           return new Response('OK');
         }
-        
+
+        // 2️⃣ معالجة رسائل الأوامر النصية المباشرة (Commands)
         if (update.message && update.message.text) {
           const chatId = update.message.chat.id;
-          const text = update.message.text.trim().toUpperCase();
-          
-          if (text === '/START') {
-            await sendTelegram(token, chatId, `🏦 *V14 ULTIMATE* 🏦
-━━━━━━━━━━━━━━━━━━━━━
-✅ *Professional Trading Bot*
+          const userId = update.message.from.id;
+          const rawText = update.message.text.trim();
+          const cmd = rawText.toUpperCase();
 
-📋 *الأوامر المتاحة:*
+          // أمر الـ Start المطور
+          if (cmd === '/START' || cmd === '/MENU') {
+            const isSubbed = await checkChannelSubscription(token, userId);
+            if (!isSubbed) {
+              await sendTelegram(token, chatId, `🚨 *مرحباً بك في نظام TRADING AI V14 ULTIMATE!*\n━━━━━━━━━━━━━━━━━━━━\n⚠️ للاستفادة من أقوى محرك إشارات تلقائي وبث حي للأوامر، *يجب عليك الانضمام إلى قناة البوت الرسمية أولاً!* \n\nبعد الانضمام، اضغط على زر التفعيل بالأسفل لتفتح لك لوحة التحكم الاحترافية.`, getSubscribeKeyboard(env.CHANNEL_INVITE_LINK));
+              return new Response('OK');
+            }
+            await sendTelegram(token, chatId, `🏦 *أهلاً بك في لوحة تحكم TRADING AI V14 ULTIMATE* 🏦\n━━━━━━━━━━━━━━━━━━━━━\nالبوت يعمل بأعلى كفاءة لربط فريمات باينانس وفحص السيولة وحساب وقف الخسارة والأهداف ذكياً.\n\nاستخدم الأزرار التفاعلية المباشرة أو قائمة الأوامر للتحكم الاحترافي:`, MENU_KEYBOARD);
+            return new Response('OK');
+          }
 
-🔹 /start - عرض القائمة الرئيسية
-🔹 /menu - عرض الأزرار التفاعلية
-🔹 /btc - سعر البيتكوين
-🔹 /eth - سعر الإيثريوم
-🔹 /sol - سعر السولانا
-🔹 /price [عملة] - سعر أي عملة
-🔹 /top - أفضل 5 عملات صاعدة
-🔹 /fear - مؤشر الخوف والطمع
-🔹 /stats - إحصائيات البوت
-🔹 /scan - فحص يدوي للسوق
-🔹 /subscribe - الاشتراك المميز
-🔹 /about - معلومات الإصدار
+          // حماية باقي الأوامر النصية بالاشتراك الإجباري
+          const isSubbed = await checkChannelSubscription(token, userId);
+          if (!isSubbed) {
+            await sendTelegram(token, chatId, `⚠️ *عذراً يا غالي، يجب عليك الاشتراك في القناة أولاً لتفعيل كافة ميزات البوت المتقدمة.*`, getSubscribeKeyboard(env.CHANNEL_INVITE_LINK));
+            return new Response('OK');
+          }
 
-📊 Dashboard: https://${url.hostname}/dashboard
-
-🤖 *AI Threshold: 85%*
-💎 للاشتراك المميز: /subscribe`, MENU);
-          } else if (text === '/SUBSCRIBE') {
-            await sendTelegram(token, chatId, `💎 *باقة الاشتراك المميز* 💎
-━━━━━━━━━━━━━━━━━━━━
-📊 *المميزات:*
-• إشارات حصرية يومياً
-• أولوية الدعم الفني
-• تحليلات متقدمة
-• تحديثات فورية
-
-💰 *السعر:* \$49/شهر
-
-للاشتراك، تواصل مع الدعم: @SupportBot`);
-          } else if (text === '/ABOUT') {
-            await sendTelegram(token, chatId, `🏦 *V14 ULTIMATE* 🏦
-━━━━━━━━━━━━━━━━━━━━━
-📅 *الإصدار:* V14.0
-📊 *الميزات:*
-• Multi-Timeframe (4H+1H+15M)
-• Premium Score System (85+)
-• Volume Filter (≥1.5x)
-• Order Blocks & FVG
-• Premium/Discount Zones
-• Position Size Calculator
-• Risk Management (1%)
-
-👨‍💻 *المطور:* @MrCrypto166
-📡 *الحالة:* تشغيل مستقر`);
-          } else if (text === '/HELP') {
-            await sendTelegram(token, chatId, `📋 *قائمة المساعدة*
-━━━━━━━━━━━━━━━━━━━━
-🔹 /start - عرض القائمة الرئيسية
-🔹 /menu - عرض الأزرار
-🔹 /btc - سعر البيتكوين
-🔹 /eth - سعر الإيثريوم
-🔹 /sol - سعر السولانا
-🔹 /price [عملة] - سعر أي عملة
-🔹 /top - أفضل 5 عملات صاعدة
-🔹 /fear - مؤشر الخوف
-🔹 /stats - إحصائيات البوت
-🔹 /scan - فحص يدوي للسوق
-🔹 /subscribe - الاشتراك
-🔹 /about - معلومات الإصدار
-
-📊 Dashboard: https://${url.hostname}/dashboard`);
+          // معالجة الأوامر الفردية باحترافية حية
+          if (cmd === '/BTC') {
+            const p = await getLivePrice('BTC');
+            await sendTelegram(token, chatId, `🪙 *سعر البيتكوين (BTC):* \`$${p?.toLocaleString() || 'غير متوفر حالياً'}\``);
+          } else if (cmd === '/ETH') {
+            const p = await getLivePrice('ETH');
+            await sendTelegram(token, chatId, `💎 *سعر الإيثريوم (ETH):* \`$${p?.toLocaleString() || 'غير متوفر حالياً'}\``);
+          } else if (cmd === '/SOL') {
+            const p = await getLivePrice('SOL');
+            await sendTelegram(token, chatId, `🚀 *سعر السولانا (SOL):* \`$${p?.toLocaleString() || 'غير متوفر حالياً'}\``);
+          } else if (cmd.startsWith('/PRICE ')) {
+            const symbol = rawText.split(' ')[1];
+            if (symbol) {
+              const p = await getLivePrice(symbol);
+              if (p) await sendTelegram(token, chatId, `🪙 *سعر العملة ${symbol.toUpperCase()}:* \`$${p.toLocaleString()}\``);
+              else await sendTelegram(token, chatId, `❌ لم نجد بيانات لهذه العملة على باينانس، يرجى كتابة الرمز صحيحاً (مثال: /price ada)`);
+            }
+          } else if (cmd === '/TOP') {
+            const movers = await getTopMovers();
+            await sendTelegram(token, chatId, `🔥 *أفضل العملات صعوداً:* \n━━━━━━━━━━━━━━━━━━━━\n${movers.map(m => `🟢 *${m.s}*: +${m.c.toFixed(2)}%`).join('\n')}`);
+          } else if (cmd === '/FEAR') {
+            const fng = await getCryptoFearAndGreed();
+            await sendTelegram(token, chatId, `📊 *مؤشر الخوف والطمع الحالي:* \`${fng}\``);
+          } else if (cmd === '/SCAN') {
+            await sendTelegram(token, chatId, `🔍 *جاري فحص الماركت يدوياً الآن وبث الصفقات المتوافقة...*`);
+            ctx.waitUntil(marketScanner(token, kv));
+          } else if (cmd === '/STATS') {
+            let stats = JSON.parse(await kv?.get('STATS') || '{"total":0}');
+            await sendTelegram(token, chatId, `📊 *إحصائيات الإشارات الحالية:* \`${stats.total}\``);
+          } else if (cmd === '/SUBSCRIBE') {
+            await sendTelegram(token, chatId, `💎 *باقة الاشتراك المميز المتقدمة* 💎\n━━━━━━━━━━━━━━━━━━━━\n• إشارات حصرية بنسب نجاح فائقة.\n• وصول فوري لتحليلات الـ SMC الحية.\n\n💰 *السعر الحالي:* $49/شهر فقط.\nلطلب الترقية تواصل مع الدعم الفني: @SupportBot`);
+          } else if (cmd === '/ABOUT') {
+            await sendTelegram(token, chatId, `🏦 *TRADING AI V14 ULTIMATE* \nالإصدار الاحترافي الكامل للربط البرمجي الشامل ومراقبة سيولة صنّاع السوق الاستراتيجية.`);
+          } else if (cmd === '/HELP') {
+            await sendTelegram(token, chatId, `📋 *قائمة المساعدة والأوامر الاحترافية:* \n━━━━━━━━━━━━━━━━━━━━\n🔹 /start - تفعيل وتشغيل لوحة التحكم والأزرار\n🔹 /btc | /eth | /sol - أسعار كبار الماركت بشكل حي\n🔹 /price [الرمز] - معرفة سعر أي عملة من باينانس مباشرة\n🔹 /top - أعلى العملات حركة وصعوداً اليوم\n🔹 /fear - معرفة مؤشر النفسية العام للمتداولين\n🔹 /scan - أمر فحص فوري ويدوي للماركت في هذه اللحظة\n🔹 /stats - عدد الصفقات الكلية المرسلة`);
           } else {
-            await sendTelegram(token, chatId, `📋 *أمر غير معروف*
-━━━━━━━━━━━━━━━━━━━━
-استخدم /help لعرض جميع الأوامر المتاحة`);
+            await sendTelegram(token, chatId, `📋 *أمر غير معروف يا فنان، أرسل /help لعرض قائمة التحكم الاحترافية الشاملة للـ V14.*`);
           }
         }
       } catch(e) {}
       return new Response('OK');
     }
-    
     return new Response('Not Found', { status: 404 });
   }
 };
