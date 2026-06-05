@@ -3,8 +3,8 @@
 // Smart Money Score | FVG | CHOCH/BOS | Liquidity Strength
 // ============================================================
 
-const TELEGRAM_CHAT_ID = '@mrcrypto166';
-const TELEGRAM_BOT_TOKEN = '8915873552:AAFOBeCYItkoKR76dSa602S9ZlnQ4ULa2GU';
+const TELEGRAM_CHAT_ID = '-1003591113059';
+const TELEGRAM_BOT_TOKEN = '8915873552:AAEWPlRdl65nKWA3Ksnbj0yc11A97eX2qCI';
 
 const CONFIG = {
   MAX_SIGNALS_PER_DAY: 4,
