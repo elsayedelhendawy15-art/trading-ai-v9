@@ -1,3 +1,21 @@
-name = "trading-ai-v9"
+name = "trading-ai-pro-v10"
 main = "worker.js"
-compatibility_date = "2024-01-01"
+compatibility_date = "2024-06-28"
+
+[[triggers]]
+crons = [
+  "*/15 * * * *",
+  "0 8 * * 1-5",
+  "30 8 * * 1-5",
+  "0 9 * * 1-5",
+  "30 12 * * 1-5",
+  "0 13 * * 1-5",
+  "30 13 * * 1-5",
+  "0 14 * * 1-5",
+  "30 14 * * 1-5",
+  "0 15 * * 1-5",
+]
+
+[[kv_namespaces]]
+binding = "SIGNALS_KV"
+id = "b41548f2eef742b185b111bafcc644f6"
