@@ -17,5 +17,5 @@ crons = [
 ]
 
 [[kv_namespaces]]
-binding = "SIGNALS_KV"
+binding = "KV_BINDING"
 id = "b41548f2eef742b185b111bafcc644f6"
