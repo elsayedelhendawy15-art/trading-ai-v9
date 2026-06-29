@@ -1,10 +1,12 @@
 // ============================================================
 // 🏆 TRADING AI PRO V11.0 - INSTITUTIONAL ULTIMATE EDITION
-// Smart Money Concept | ICT | Crypto Trading | Multi-Exchange
 // ============================================================
 
-// ======================= 1. الإعدادات الأساسية =======================
+// ======================= التوكن والـ KV =======================
+const BOT_TOKEN = '8915873552:AAEWPlRdl65nKWA3Ksnbj0yc11A97eX2qCI';
+const KV_BINDING = 'b41548f2eef742b185b111bafcc644f6';
 
+// ======================= الإعدادات الأساسية =======================
 const CONFIG = {
   MAX_SIGNALS_PER_DAY: 12,
   MIN_RISK_REWARD: 2.5,
@@ -111,8 +113,7 @@ const CONFIG = {
   }
 };
 
-// ======================= 2. القوائم =======================
-
+// ======================= القوائم =======================
 const INSTITUTIONAL_WATCH_LIST = [
   'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOT', 'LINK', 'MATIC',
   'UNI', 'ATOM', 'LTC', 'BCH', 'NEAR', 'APT', 'SUI', 'ARB', 'OP', 'SEI',
@@ -125,9 +126,7 @@ const STABLE_COINS_BLACKLIST = [
   'USDC', 'FDUSD', 'TUSD', 'USDP', 'DAI', 'BUSD', 'USDD', 'FRAX', 'LUSD', 'GUSD'
 ];
 
-// ======================= 3. المتغيرات العامة =======================
-
-let BOT_TOKEN = null;
+// ======================= المتغيرات العامة =======================
 let dataCache = new Map();
 let fundingCache = new Map();
 let oiCache = new Map();
@@ -137,14 +136,9 @@ let lastSend = 0;
 let messageQueue = [];
 let isProcessingQueue = false;
 
-// ======================= 4. الأدوات المساعدة =======================
-
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
-function setBotToken(token) {
-  BOT_TOKEN = token;
-}
-
+// ======================= دوال الإرسال =======================
 async function sendTelegram(chatId, text, keyboard = null) {
   if (!BOT_TOKEN) return;
   messageQueue.push({ chatId, text, keyboard });
@@ -2027,14 +2021,6 @@ export default {
   },
 
   async fetch(request, env, ctx) {
-    // ====== تعيين التوكن ======
-    const token = env?.TELEGRAM_BOT_TOKEN;
-    if (token) {
-      setBotToken(token);
-    } else {
-      console.error('❌ TELEGRAM_BOT_TOKEN not set in environment!');
-    }
-
     const url = new URL(request.url);
     const kv = env?.KV_BINDING;
 
