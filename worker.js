@@ -1,6 +1,6 @@
 // ============================================================
-// 🏆 TRADING AI PRO V10.0 - INSTITUTIONAL ULTIMATE EDITION
-// Smart Money Concept | ICT | Crypto Trading
+// 🏆 TRADING AI PRO V11.0 - INSTITUTIONAL ULTIMATE EDITION
+// Smart Money Concept | ICT | Crypto Trading | Multi-Exchange
 // ============================================================
 
 // ======================= 1. الإعدادات الأساسية =======================
@@ -8,18 +8,51 @@
 const REQUIRED_CHANNEL = '@mrcrypto166';
 
 const CONFIG = {
-  MAX_SIGNALS_PER_DAY: 8,
+  MAX_SIGNALS_PER_DAY: 12,
   MIN_RISK_REWARD: 2.5,
   SCORE_STRONG: 95,
   SCORE_BUY: 88,
   SCORE_WATCH: 75,
-  COOLDOWN_HOURS: 4,
+  COOLDOWN_HOURS: 3,
   ANTI_SPAM_MS: 1500,
   ATR_PERIOD: 14,
   TP_ATR_MULTIPLIER: [1.5, 2.5, 3.5],
   CACHE_TTL_MS: 300000,
-  BATCH_SIZE: 2,
-  DELAY: 1000,
+  BATCH_SIZE: 3,
+  DELAY: 500,
+  
+  EXCHANGES: {
+    BINANCE: {
+      name: 'Binance',
+      baseUrl: 'https://api.binance.com',
+      priority: 1,
+      minVolume: 10000000,
+      enabled: true
+    },
+    BYBIT: {
+      name: 'Bybit',
+      baseUrl: 'https://api.bybit.com',
+      priority: 2,
+      minVolume: 5000000,
+      enabled: true
+    }
+  },
+  
+  RECOMMENDATIONS: {
+    MAX_PER_SCAN: 5,
+    MIN_CONFIDENCE: 70,
+    MIN_HTF_ALIGNMENT: 0.8,
+    MIN_SENTIMENT_SCORE: 60
+  },
+  
+  RISK: {
+    MAX_POSITION_SIZE_PERCENT: 20,
+    MAX_DAILY_LOSS_PERCENT: 5,
+    MAX_CONSECUTIVE_LOSSES: 3,
+    MIN_RISK_REWARD: 2.5,
+    TRAILING_STOP_ACTIVATION: 1.5,
+    TRAILING_STOP_DISTANCE: 0.5
+  },
   
   INSTITUTIONAL: {
     MIN_VOLUME_USD: 10000000,
@@ -80,7 +113,21 @@ const CONFIG = {
   }
 };
 
-// ======================= 2. المتغيرات العامة =======================
+// ======================= 2. القوائم =======================
+
+const INSTITUTIONAL_WATCH_LIST = [
+  'BTC', 'ETH', 'BNB', 'SOL', 'XRP', 'ADA', 'AVAX', 'DOT', 'LINK', 'MATIC',
+  'UNI', 'ATOM', 'LTC', 'BCH', 'NEAR', 'APT', 'SUI', 'ARB', 'OP', 'SEI',
+  'INJ', 'RNDR', 'FET', 'AGIX', 'OCEAN', 'DOGE', 'SHIB', 'PEPE', 'WIF', 'FLOKI',
+  'MNT', 'VET', 'ICP', 'FIL', 'ETC', 'AAVE', 'MKR', 'CRV', 'SUSHI', 'CAKE',
+  'GALA', 'SAND', 'MANA', 'AXS', 'FLOW', 'EOS', 'NEO', 'XLM', 'ALGO', 'HBAR'
+];
+
+const STABLE_COINS_BLACKLIST = [
+  'USDC', 'FDUSD', 'TUSD', 'USDP', 'DAI', 'BUSD', 'USDD', 'FRAX', 'LUSD', 'GUSD'
+];
+
+// ======================= 3. المتغيرات العامة =======================
 
 let dataCache = new Map();
 let fundingCache = new Map();
@@ -91,22 +138,6 @@ let lastSend = 0;
 let messageQueue = [];
 let isProcessingQueue = false;
 
-// ======================= 3. قوائم العملات =======================
-
-const INSTITUTIONAL_WATCH_LIST = [
-  'BTC', 'ETH', 'BNB', 'SOL', 'XRP',
-  'ADA', 'AVAX', 'DOT', 'LINK', 'MATIC',
-  'UNI', 'ATOM', 'LTC', 'BCH', 'NEAR',
-  'APT', 'SUI', 'ARB', 'OP', 'SEI',
-  'INJ', 'RNDR', 'FET', 'AGIX', 'OCEAN',
-  'DOGE', 'SHIB', 'PEPE', 'WIF', 'FLOKI'
-];
-
-const STABLE_COINS_BLACKLIST = [
-  'USDC', 'FDUSD', 'TUSD', 'USDP', 'DAI',
-  'BUSD', 'USDD', 'FRAX', 'LUSD', 'GUSD'
-];
-
 // ======================= 4. الأدوات المساعدة =======================
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -114,7 +145,6 @@ const delay = ms => new Promise(r => setTimeout(r, ms));
 async function sendTelegram(chatId, text, keyboard = null) {
   const token = env?.TELEGRAM_BOT_TOKEN;
   if (!token) return;
-  
   messageQueue.push({ chatId, text, keyboard });
   processQueue();
 }
@@ -122,7 +152,6 @@ async function sendTelegram(chatId, text, keyboard = null) {
 async function sendTelegramImmediate(chatId, text, keyboard = null) {
   const token = env?.TELEGRAM_BOT_TOKEN;
   if (!token) return;
-  
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   try {
     const body = {
@@ -143,7 +172,6 @@ async function sendTelegramImmediate(chatId, text, keyboard = null) {
 async function processQueue() {
   const token = env?.TELEGRAM_BOT_TOKEN;
   if (!token) return;
-  
   if (isProcessingQueue || messageQueue.length === 0) return;
   isProcessingQueue = true;
   while (messageQueue.length > 0) {
@@ -293,6 +321,18 @@ class AdvancedIndicators {
       return { type: 'BEARISH', strength: 'STRONG' };
     }
     return null;
+  }
+
+  // حساب OBV
+  static calculateOBV(data) {
+    let obv = 0;
+    const values = [];
+    for (let i = 1; i < data.length; i++) {
+      if (data[i].close > data[i-1].close) obv += data[i].vol;
+      else if (data[i].close < data[i-1].close) obv -= data[i].vol;
+      values.push(obv);
+    }
+    return obv;
   }
 }
 
@@ -483,7 +523,7 @@ class AdvancedSMC {
         const size = c1.low - c3.high;
         const sizePips = size / pipValue;
         if (sizePips >= CONFIG.SMC.MIN_FVG_SIZE_PIPS) {
-          const isMitigated = data.slice(i + 3).some(c => c.close <= c1.low && c.close >= c3.high);
+          const isMitigated = data.slice(i + 3).some(c => c.close <= c1.low && c >= c3.high);
           const encroachment = (c1.low + c3.high) / 2;
           
           fvgs.push({
@@ -902,240 +942,598 @@ class InstitutionalLearningSystem {
   }
 }
 
-// ======================= 9. نظام التقييم المؤسسي =======================
+// ======================= 9. تحليل HTF =======================
 
-class InstitutionalScoring {
-  static async calculateScore(coin, data15m, data1h, data4h, dataDaily, currentPrice, btcBullish, btcData, ethData, intendedDirection, learningSystem) {
-    let score = 0;
-    let reasons = [];
-    const weights = learningSystem ? learningSystem.getOptimalWeights() : {
-      bos: 15, choch: 10, fvg: 10, ob: 15, sweep: 15,
-      volume: 10, rsi: 5, dailyBias: 20, smt: 10, vwap: 8
-    };
+class HTFAnalyzer {
+  static analyze(dataDaily, data4h, data1h) {
+    const dailyTrend = this.getTrend(dataDaily);
+    const h4Trend = this.getTrend(data4h);
+    const h1Trend = this.getTrend(data1h);
     
-    const dailyBias = await AdvancedDailyBias.analyze(coin + 'USDT', dataDaily, data4h, data1h, btcData, ethData);
+    const alignment = (dailyTrend === h4Trend && h4Trend === h1Trend);
     
-    if (dailyBias.bias === 'BULLISH' && intendedDirection === 'LONG') {
-      const weight = weights.dailyBias * dailyBias.confidence;
-      score += weight;
-      reasons.push(`📅 Daily Bias صاعد (${(dailyBias.confidence * 100).toFixed(0)}%) (+${weight.toFixed(0)})`);
-    } else if (dailyBias.bias === 'BEARISH' && intendedDirection === 'SHORT') {
-      const weight = weights.dailyBias * dailyBias.confidence;
-      score += weight;
-      reasons.push(`📅 Daily Bias هابط (${(dailyBias.confidence * 100).toFixed(0)}%) (+${weight.toFixed(0)})`);
-    } else if (dailyBias.bias !== 'NEUTRAL') {
-      score -= 15;
-      reasons.push(`⚠️ Daily Bias معاكس (-15)`);
-    }
-    
-    const smc = AdvancedSMC;
-    const { bos, choch } = smc.detectBOS_CHOCH(data15m);
-    
-    if (bos && bos.type === 'BULLISH' && intendedDirection === 'LONG') {
-      score += weights.bos * Math.min(bos.strength, 1.5);
-      reasons.push(`🚀 BOS صاعد (+${(weights.bos * Math.min(bos.strength, 1.5)).toFixed(0)})`);
-    }
-    if (bos && bos.type === 'BEARISH' && intendedDirection === 'SHORT') {
-      score += weights.bos * Math.min(bos.strength, 1.5);
-      reasons.push(`📉 BOS هابط (+${(weights.bos * Math.min(bos.strength, 1.5)).toFixed(0)})`);
-    }
-    
-    if (choch && choch.type === 'BULLISH' && intendedDirection === 'LONG') {
-      score += weights.choch * Math.min(choch.strength, 1.5);
-      reasons.push(`🔄 CHoCH صاعد (+${(weights.choch * Math.min(choch.strength, 1.5)).toFixed(0)})`);
-    }
-    if (choch && choch.type === 'BEARISH' && intendedDirection === 'SHORT') {
-      score += weights.choch * Math.min(choch.strength, 1.5);
-      reasons.push(`🔄 CHoCH هابط (+${(weights.choch * Math.min(choch.strength, 1.5)).toFixed(0)})`);
-    }
-    
-    const fvg = smc.detectFVG(data15m);
-    if (fvg && fvg.type === 'BULLISH' && intendedDirection === 'LONG' && !fvg.isMitigated) {
-      score += weights.fvg * fvg.strength;
-      reasons.push(`📊 FVG صاعد (+${(weights.fvg * fvg.strength).toFixed(0)})`);
-    }
-    if (fvg && fvg.type === 'BEARISH' && intendedDirection === 'SHORT' && !fvg.isMitigated) {
-      score += weights.fvg * fvg.strength;
-      reasons.push(`📊 FVG هابط (+${(weights.fvg * fvg.strength).toFixed(0)})`);
-    }
-    
-    const ob = smc.detectOrderBlock(data15m);
-    if (ob && ob.type === 'BULLISH' && intendedDirection === 'LONG' && !ob.isMitigated) {
-      score += weights.ob * ob.strength / 3;
-      reasons.push(`🏛️ OB صاعد (+${(weights.ob * ob.strength / 3).toFixed(0)})`);
-    }
-    if (ob && ob.type === 'BEARISH' && intendedDirection === 'SHORT' && !ob.isMitigated) {
-      score += weights.ob * ob.strength / 3;
-      reasons.push(`🏛️ OB هابط (+${(weights.ob * ob.strength / 3).toFixed(0)})`);
-    }
-    
-    const liquidity = smc.detectLiquidity(data15m);
-    if (liquidity.hasSweep && liquidity.strongestSweep) {
-      const sweep = liquidity.strongestSweep;
-      if (sweep.type === 'BUY' && intendedDirection === 'LONG') {
-        score += weights.sweep * sweep.strength;
-        reasons.push(`🦅 Sweep صاعد (+${(weights.sweep * sweep.strength).toFixed(0)})`);
-      }
-      if (sweep.type === 'SELL' && intendedDirection === 'SHORT') {
-        score += weights.sweep * sweep.strength;
-        reasons.push(`🦅 Sweep هابط (+${(weights.sweep * sweep.strength).toFixed(0)})`);
-      }
-    }
-    
-    const smt = smc.detectSMTDivergence(data15m, btcData, ethData);
-    if (smt) {
-      if (smt.type === 'BULLISH' && intendedDirection === 'LONG') {
-        score += weights.smt;
-        reasons.push(`🌊 SMT صاعد (+${weights.smt})`);
-      }
-      if (smt.type === 'BEARISH' && intendedDirection === 'SHORT') {
-        score += weights.smt;
-        reasons.push(`🌊 SMT هابط (+${weights.smt})`);
-      }
-    }
-    
-    const vwap = AdvancedIndicators.calculateVWAP(data15m);
-    if (vwap) {
-      if (intendedDirection === 'LONG' && currentPrice < vwap * 0.99) {
-        score += weights.vwap;
-        reasons.push(`📊 تحت VWAP (+${weights.vwap})`);
-      }
-      if (intendedDirection === 'SHORT' && currentPrice > vwap * 1.01) {
-        score += weights.vwap;
-        reasons.push(`📊 فوق VWAP (+${weights.vwap})`);
-      }
-    }
-    
-    const vp = AdvancedIndicators.calculateVolumeProfile(data15m);
-    if (vp) {
-      if (intendedDirection === 'LONG' && currentPrice < vp.valueAreaLow) {
-        score += 5;
-        reasons.push(`📊 تحت منطقة القيمة (+5)`);
-      }
-      if (intendedDirection === 'SHORT' && currentPrice > vp.valueAreaHigh) {
-        score += 5;
-        reasons.push(`📊 فوق منطقة القيمة (+5)`);
-      }
-    }
-    
-    const cvd = AdvancedIndicators.calculateCVD(data15m);
-    if (cvd && cvd.divergence) {
-      if (cvd.divergence.type === 'BULLISH' && intendedDirection === 'LONG') {
-        score += 8;
-        reasons.push(`📊 CVD Divergence صاعد (+8)`);
-      }
-      if (cvd.divergence.type === 'BEARISH' && intendedDirection === 'SHORT') {
-        score += 8;
-        reasons.push(`📊 CVD Divergence هابط (+8)`);
-      }
-    }
-    
-    const vol = data15m[data15m.length - 1].vol;
-    const avgVol = data15m.slice(-20).reduce((a, b) => a + b.vol, 0) / 20;
-    const volRatio = vol / avgVol;
-    const usdtVolume = vol * currentPrice;
-    
-    if (usdtVolume > CONFIG.INSTITUTIONAL.MIN_VOLUME_USD) {
-      score += weights.volume;
-      reasons.push(`💰 حجم > 10M$ (+${weights.volume})`);
-    }
-    if (volRatio > 1.5) {
-      score += weights.volume * 0.5;
-      reasons.push(`🔥 حجم مرتفع (+${(weights.volume * 0.5).toFixed(0)})`);
-    }
-    
-    const rsiVal = AdvancedIndicators.wilderRSI(data15m.map(d => d.close));
-    if (intendedDirection === 'LONG' && rsiVal >= CONFIG.RSI.BULLISH_MIN && rsiVal <= CONFIG.RSI.BULLISH_MAX) {
-      score += weights.rsi;
-      reasons.push(`📊 RSI صاعد ${rsiVal} (+${weights.rsi})`);
-    } else if (intendedDirection === 'SHORT' && rsiVal >= CONFIG.RSI.BEARISH_MIN && rsiVal <= CONFIG.RSI.BEARISH_MAX) {
-      score += weights.rsi;
-      reasons.push(`📊 RSI هابط ${rsiVal} (+${weights.rsi})`);
-    } else if (intendedDirection === 'LONG' && rsiVal < CONFIG.RSI.OVERSOLD) {
-      score += weights.rsi * 0.8;
-      reasons.push(`🟢 RSI ذروة بيع ${rsiVal} (+${(weights.rsi * 0.8).toFixed(0)})`);
-    } else if (intendedDirection === 'SHORT' && rsiVal > CONFIG.RSI.OVERBOUGHT) {
-      score += weights.rsi * 0.8;
-      reasons.push(`🔴 RSI ذروة شراء ${rsiVal} (+${(weights.rsi * 0.8).toFixed(0)})`);
-    }
-    
-    if (btcBullish) {
-      if (intendedDirection === 'LONG') {
-        score += 10;
-        reasons.push(`🟢 BTC صاعد (+10)`);
-      } else {
-        score -= CONFIG.BTC_FILTER.SHORT_PENALTY_WHEN_BULLISH;
-        reasons.push(`🔴 BTC صاعد - SHORT مخفض (-${CONFIG.BTC_FILTER.SHORT_PENALTY_WHEN_BULLISH})`);
-      }
-    } else {
-      if (intendedDirection === 'SHORT') {
-        score += 10;
-        reasons.push(`🟢 BTC هابط - دعم SHORT (+10)`);
-      } else {
-        score -= CONFIG.BTC_FILTER.LONG_PENALTY_WHEN_BEARISH;
-        reasons.push(`🔴 BTC هابط - LONG مخفض (-${CONFIG.BTC_FILTER.LONG_PENALTY_WHEN_BEARISH})`);
-      }
-    }
-    
-    const killZone = smc.getCurrentKillZone();
-    if (killZone) {
-      if ((killZone.name === 'LONDON' || killZone.name === 'NEW_YORK') && (intendedDirection === 'LONG' || intendedDirection === 'SHORT')) {
-        score += 10;
-        reasons.push(`⏰ منطقة ${killZone.name} النشطة (+10)`);
-      }
-    }
-    
-    const hasLiquidity = await checkLiquidity(coin + 'USDT');
-    if (!hasLiquidity) {
-      score -= 30;
-      reasons.push(`⚠️ سيولة منخفضة (-30)`);
-    }
+    let strength = 0;
+    if (dailyTrend === 'UP') strength += 0.4;
+    if (h4Trend === 'UP') strength += 0.35;
+    if (h1Trend === 'UP') strength += 0.25;
     
     return {
-      score: Math.min(Math.max(score, 0), 100),
-      reasons,
-      rsiVal,
-      volRatio,
-      dailyBias,
-      bos,
-      choch,
-      fvg,
-      ob,
-      liquidity,
-      smt,
-      vwap,
-      cvd,
-      killZone
+      dailyTrend,
+      h4Trend,
+      h1Trend,
+      alignment,
+      strength: Math.min(strength, 1),
+      direction: strength > 0.6 ? 'BULLISH' : strength < 0.4 ? 'BEARISH' : 'NEUTRAL'
     };
+  }
+
+  static getTrend(data) {
+    if (!data || data.length < 50) return 'NEUTRAL';
+    
+    const closes = data.map(d => d.close);
+    const ema20 = AdvancedIndicators.ema(closes, 20);
+    const ema50 = AdvancedIndicators.ema(closes, 50);
+    const currentPrice = closes[closes.length - 1];
+    
+    if (currentPrice > ema20 && ema20 > ema50) return 'UP';
+    if (currentPrice < ema20 && ema20 < ema50) return 'DOWN';
+    
+    return 'NEUTRAL';
   }
 }
 
-// ======================= 10. دوال جلب البيانات =======================
+// ======================= 10. تحليل المشاعر =======================
 
-async function getData(symbol, interval = '15m', limit = 200, forceFresh = false) {
-  const cacheKey = `${symbol}_${interval}_${limit}`;
-  const now = Date.now();
-  
-  if (!forceFresh && dataCache.has(cacheKey)) {
-    const cached = dataCache.get(cacheKey);
-    if (now - cached.timestamp < CONFIG.CACHE_TTL_MS) return cached.data;
+class SentimentAnalyzer {
+  static async analyze(symbol, exchange = 'Binance') {
+    try {
+      const [funding, oi, ticker] = await Promise.all([
+        this.getFundingRate(symbol, exchange),
+        this.getOpenInterest(symbol, exchange),
+        this.getTicker(symbol, exchange)
+      ]);
+      
+      let sentiment = 50;
+      let factors = [];
+      
+      if (funding !== null) {
+        if (funding < -0.0005) {
+          sentiment += 15;
+          factors.push('Funding Rate منخفض (Bullish)');
+        } else if (funding > 0.0005) {
+          sentiment -= 15;
+          factors.push('Funding Rate مرتفع (Bearish)');
+        }
+      }
+      
+      if (oi !== null) {
+        const avgOI = await this.getAvgOI(symbol, exchange);
+        if (avgOI && oi > avgOI * 1.2) {
+          sentiment += 10;
+          factors.push('OI مرتفع (نشاط قوي)');
+        } else if (avgOI && oi < avgOI * 0.8) {
+          sentiment -= 5;
+          factors.push('OI منخفض (ضعف)');
+        }
+      }
+      
+      if (ticker) {
+        if (ticker.change24h > 5) sentiment += 10;
+        else if (ticker.change24h < -5) sentiment -= 10;
+        factors.push(`تغير 24h: ${ticker.change24h.toFixed(2)}%`);
+      }
+      
+      sentiment = Math.min(Math.max(sentiment, 0), 100);
+      
+      return {
+        score: sentiment,
+        bias: sentiment > 60 ? 'BULLISH' : sentiment < 40 ? 'BEARISH' : 'NEUTRAL',
+        level: sentiment > 70 ? 'EXTREME_BULLISH' : sentiment < 30 ? 'EXTREME_BEARISH' : 'NORMAL',
+        factors,
+        confidence: Math.abs(sentiment - 50) / 50
+      };
+    } catch (e) {
+      return { score: 50, bias: 'NEUTRAL', level: 'NORMAL', factors: [], confidence: 0 };
+    }
+  }
+
+  static async getFundingRate(symbol, exchange) {
+    try {
+      if (exchange === 'Binance') {
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/premiumIndex?symbol=${symbol}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        return +data.lastFundingRate;
+      } else if (exchange === 'Bybit') {
+        const res = await fetch(`${CONFIG.EXCHANGES.BYBIT.baseUrl}/v5/market/tickers?category=linear&symbol=${symbol}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (data.retCode !== 0 || !data.result?.list?.[0]) return null;
+        return +data.result.list[0].fundingRate;
+      }
+    } catch { return null; }
+    return null;
+  }
+
+  static async getOpenInterest(symbol, exchange) {
+    try {
+      if (exchange === 'Binance') {
+        const res = await fetch(`https://fapi.binance.com/futures/data/openInterestHist?symbol=${symbol}&period=5m&limit=1`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (!data || data.length === 0) return null;
+        return +data[0].sumOpenInterest;
+      } else if (exchange === 'Bybit') {
+        const res = await fetch(`${CONFIG.EXCHANGES.BYBIT.baseUrl}/v5/market/open-interest?category=linear&symbol=${symbol}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (data.retCode !== 0 || !data.result?.list?.[0]) return null;
+        return +data.result.list[0].openInterest;
+      }
+    } catch { return null; }
+    return null;
+  }
+
+  static async getTicker(symbol, exchange) {
+    try {
+      if (exchange === 'Binance') {
+        const res = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        return {
+          price: +data.lastPrice,
+          volume24h: +data.quoteVolume,
+          change24h: +data.priceChangePercent,
+          high: +data.highPrice,
+          low: +data.lowPrice
+        };
+      } else if (exchange === 'Bybit') {
+        const res = await fetch(`${CONFIG.EXCHANGES.BYBIT.baseUrl}/v5/market/tickers?category=spot&symbol=${symbol}`);
+        if (!res.ok) return null;
+        const data = await res.json();
+        if (data.retCode !== 0 || !data.result?.list?.[0]) return null;
+        const ticker = data.result.list[0];
+        return {
+          price: +ticker.lastPrice,
+          volume24h: +ticker.volume24h,
+          change24h: +ticker.price24hPcnt * 100,
+          high: +ticker.highPrice24h,
+          low: +ticker.lowPrice24h
+        };
+      }
+    } catch { return null; }
+    return null;
+  }
+
+  static async getAvgOI(symbol, exchange) {
+    try {
+      const history = [];
+      for (let i = 0; i < 5; i++) {
+        const oi = await this.getOpenInterest(symbol, exchange);
+        if (oi) history.push(oi);
+        await delay(100);
+      }
+      if (history.length === 0) return null;
+      return history.reduce((a, b) => a + b, 0) / history.length;
+    } catch { return null; }
+  }
+}
+
+// ======================= 11. نظام إدارة المخاطر =======================
+
+class AdvancedRiskManager {
+  constructor(kv) {
+    this.kv = kv;
+    this.accountBalance = 10000;
+    this.dailyLoss = 0;
+    this.consecutiveLosses = 0;
+  }
+
+  async initialize() {
+    const data = await this.kv?.get('RISK_DATA');
+    if (data) {
+      const parsed = JSON.parse(data);
+      this.accountBalance = parsed.balance || 10000;
+      this.dailyLoss = parsed.dailyLoss || 0;
+      this.consecutiveLosses = parsed.consecutiveLosses || 0;
+      
+      const lastReset = parsed.lastReset || 0;
+      if (Date.now() - lastReset > 24 * 60 * 60 * 1000) {
+        this.dailyLoss = 0;
+        this.consecutiveLosses = 0;
+        await this.save();
+      }
+    }
+  }
+
+  async save() {
+    await this.kv?.put('RISK_DATA', JSON.stringify({
+      balance: this.accountBalance,
+      dailyLoss: this.dailyLoss,
+      consecutiveLosses: this.consecutiveLosses,
+      lastReset: Date.now()
+    }));
+  }
+
+  calculatePositionSize(entryPrice, stopLoss, riskPercent = 2) {
+    const riskAmount = this.accountBalance * (riskPercent / 100);
+    const slDistance = Math.abs(entryPrice - stopLoss) / entryPrice;
+    
+    if (slDistance === 0) return 0;
+    
+    const positionSize = riskAmount / slDistance / entryPrice;
+    const maxPosition = this.accountBalance * (CONFIG.RISK.MAX_POSITION_SIZE_PERCENT / 100) / entryPrice;
+    
+    return Math.min(positionSize, maxPosition);
+  }
+
+  async updateAfterTrade(trade) {
+    if (trade.result === 'WIN') {
+      this.accountBalance += trade.profit;
+      this.consecutiveLosses = 0;
+    } else {
+      this.accountBalance += trade.profit;
+      this.dailyLoss += Math.abs(trade.profit);
+      this.consecutiveLosses++;
+    }
+    
+    await this.save();
+  }
+
+  canTrade() {
+    const dailyLossPercent = (this.dailyLoss / this.accountBalance) * 100;
+    if (dailyLossPercent >= CONFIG.RISK.MAX_DAILY_LOSS_PERCENT) {
+      return { allowed: false, reason: 'الحد اليومي للخسارة تم تجاوزه' };
+    }
+    
+    if (this.consecutiveLosses >= CONFIG.RISK.MAX_CONSECUTIVE_LOSSES) {
+      return { allowed: false, reason: '3 خسائر متتالية - توقف مؤقت' };
+    }
+    
+    return { allowed: true, reason: 'OK' };
+  }
+
+  calculateTrailingStop(entry, current, high, side, profitPercent) {
+    if (profitPercent < CONFIG.RISK.TRAILING_STOP_ACTIVATION) {
+      return null;
+    }
+    
+    const trailDistance = CONFIG.RISK.TRAILING_STOP_DISTANCE / 100;
+    
+    if (side === 'LONG') {
+      const highest = Math.max(entry, high);
+      return highest * (1 - trailDistance);
+    } else {
+      const lowest = Math.min(entry, high);
+      return lowest * (1 + trailDistance);
+    }
+  }
+}
+
+// ======================= 12. نظام التوصيات المتقدم =======================
+
+class AdvancedRecommendationSystem {
+  static filterRecommendations(signals) {
+    let filtered = signals.filter(s => s.score >= CONFIG.RECOMMENDATIONS.MIN_CONFIDENCE);
+    filtered = filtered.filter(s => s.htfAlignment >= CONFIG.RECOMMENDATIONS.MIN_HTF_ALIGNMENT);
+    filtered = filtered.filter(s => s.sentimentScore >= CONFIG.RECOMMENDATIONS.MIN_SENTIMENT_SCORE);
+    filtered.sort((a, b) => b.priorityScore - a.priorityScore);
+    return filtered.slice(0, CONFIG.RECOMMENDATIONS.MAX_PER_SCAN);
   }
   
+  static calculatePriorityScore(signal) {
+    let score = 0;
+    score += signal.smcScore * 0.4;
+    if (signal.dailyBias === signal.direction) score += 20;
+    score += signal.htfAlignment * 15;
+    score += (signal.sentimentScore / 100) * 15;
+    score += Math.min(signal.rr / 5, 1) * 10;
+    return Math.min(score, 100);
+  }
+}
+
+// ======================= 13. Multi-Exchange Data =======================
+
+class MultiExchangeData {
+  static async getData(symbol, interval = '15m', limit = 200) {
+    let data = await this.getBinanceData(symbol, interval, limit);
+    if (data) return data;
+    data = await this.getBybitData(symbol, interval, limit);
+    if (data) return data;
+    return null;
+  }
+
+  static async getBinanceData(symbol, interval = '15m', limit = 200) {
+    try {
+      const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.map(c => ({
+        time: new Date(c[0]),
+        open: +c[1],
+        high: +c[2],
+        low: +c[3],
+        close: +c[4],
+        vol: +c[5],
+        exchange: 'Binance'
+      }));
+    } catch { return null; }
+  }
+
+  static async getBybitData(symbol, interval = '15m', limit = 200) {
+    try {
+      const intervalMap = { '1m': '1', '5m': '5', '15m': '15', '1h': '60', '4h': '240', '1d': 'D' };
+      const bybitInterval = intervalMap[interval] || '15';
+      
+      const res = await fetch(`${CONFIG.EXCHANGES.BYBIT.baseUrl}/v5/market/kline?category=spot&symbol=${symbol}&interval=${bybitInterval}&limit=${limit}`);
+      if (!res.ok) return null;
+      const data = await res.json();
+      if (data.retCode !== 0 || !data.result?.list) return null;
+      
+      return data.result.list.map(c => ({
+        time: new Date(parseInt(c[0])),
+        open: +c[1],
+        high: +c[2],
+        low: +c[3],
+        close: +c[4],
+        vol: +c[5],
+        exchange: 'Bybit'
+      }));
+    } catch { return null; }
+  }
+}
+
+// ======================= 14. التقييم المتقدم =======================
+
+class EnhancedInstitutionalScoring {
+  static async calculateScore(coin, data15m, data1h, data4h, dataDaily, currentPrice, btcBullish, btcData, ethData, intendedDirection, learningSystem, exchange = 'Binance') {
+    const smcScore = await this.calculateSMCScore(coin, data15m, currentPrice, intendedDirection);
+    const htfAnalysis = HTFAnalyzer.analyze(dataDaily, data4h, data1h);
+    const htfScore = htfAnalysis.strength * 100;
+    const htfAlignment = htfAnalysis.alignment ? 1 : 0.5;
+    
+    const dailyBias = await AdvancedDailyBias.analyze(coin + 'USDT', dataDaily, data4h, data1h, btcData, ethData);
+    const sentiment = await SentimentAnalyzer.analyze(coin + 'USDT', exchange);
+    
+    const rr = await this.calculateRR(data15m, currentPrice, intendedDirection);
+    const rrScore = Math.min((rr / CONFIG.MIN_RISK_REWARD) * 100, 100);
+    
+    let finalScore = 0;
+    const weights = { smc: 0.35, htf: 0.20, dailyBias: 0.20, sentiment: 0.15, riskReward: 0.10 };
+    
+    finalScore += smcScore.score * weights.smc;
+    finalScore += htfScore * weights.htf;
+    
+    if (dailyBias.bias === intendedDirection) finalScore += 100 * weights.dailyBias;
+    else if (dailyBias.bias === 'NEUTRAL') finalScore += 50 * weights.dailyBias;
+    
+    finalScore += sentiment.score * weights.sentiment;
+    finalScore += rrScore * weights.riskReward;
+    
+    finalScore = Math.min(Math.max(finalScore, 0), 100);
+    
+    return {
+      score: finalScore,
+      smcScore: smcScore.score,
+      htfScore: htfScore,
+      dailyBias: dailyBias.bias,
+      dailyBiasConfidence: dailyBias.confidence,
+      sentimentScore: sentiment.score,
+      sentimentBias: sentiment.bias,
+      htfAlignment,
+      rr,
+      reasons: [
+        ...smcScore.reasons,
+        `HTF: ${htfAnalysis.direction} (${(htfScore).toFixed(0)}%)`,
+        `Sentiment: ${sentiment.bias} (${sentiment.score.toFixed(0)})`,
+        `Daily Bias: ${dailyBias.bias} (${(dailyBias.confidence * 100).toFixed(0)}%)`
+      ]
+    };
+  }
+
+  static async calculateSMCScore(coin, data15m, currentPrice, intendedDirection) {
+    let score = 0;
+    const reasons = [];
+    
+    const { bos, choch } = AdvancedSMC.detectBOS_CHOCH(data15m);
+    
+    if (bos && bos.type === 'BULLISH' && intendedDirection === 'LONG') {
+      score += 15 * Math.min(bos.strength, 1.5);
+      reasons.push(`🚀 BOS صاعد (+${(15 * Math.min(bos.strength, 1.5)).toFixed(0)})`);
+    }
+    if (bos && bos.type === 'BEARISH' && intendedDirection === 'SHORT') {
+      score += 15 * Math.min(bos.strength, 1.5);
+      reasons.push(`📉 BOS هابط (+${(15 * Math.min(bos.strength, 1.5)).toFixed(0)})`);
+    }
+    
+    if (choch && choch.type === 'BULLISH' && intendedDirection === 'LONG') {
+      score += 10 * Math.min(choch.strength, 1.5);
+      reasons.push(`🔄 CHoCH صاعد (+${(10 * Math.min(choch.strength, 1.5)).toFixed(0)})`);
+    }
+    if (choch && choch.type === 'BEARISH' && intendedDirection === 'SHORT') {
+      score += 10 * Math.min(choch.strength, 1.5);
+      reasons.push(`🔄 CHoCH هابط (+${(10 * Math.min(choch.strength, 1.5)).toFixed(0)})`);
+    }
+    
+    const fvg = AdvancedSMC.detectFVG(data15m);
+    if (fvg && fvg.type === 'BULLISH' && intendedDirection === 'LONG' && !fvg.isMitigated) {
+      score += 10 * fvg.strength;
+      reasons.push(`📊 FVG صاعد (+${(10 * fvg.strength).toFixed(0)})`);
+    }
+    if (fvg && fvg.type === 'BEARISH' && intendedDirection === 'SHORT' && !fvg.isMitigated) {
+      score += 10 * fvg.strength;
+      reasons.push(`📊 FVG هابط (+${(10 * fvg.strength).toFixed(0)})`);
+    }
+    
+    const ob = AdvancedSMC.detectOrderBlock(data15m);
+    if (ob && ob.type === 'BULLISH' && intendedDirection === 'LONG' && !ob.isMitigated) {
+      score += 10 * ob.strength / 3;
+      reasons.push(`🏛️ OB صاعد (+${(10 * ob.strength / 3).toFixed(0)})`);
+    }
+    if (ob && ob.type === 'BEARISH' && intendedDirection === 'SHORT' && !ob.isMitigated) {
+      score += 10 * ob.strength / 3;
+      reasons.push(`🏛️ OB هابط (+${(10 * ob.strength / 3).toFixed(0)})`);
+    }
+    
+    const liquidity = AdvancedSMC.detectLiquidity(data15m);
+    if (liquidity.hasSweep && liquidity.strongestSweep) {
+      const sweep = liquidity.strongestSweep;
+      if (sweep.type === 'BUY' && intendedDirection === 'LONG') {
+        score += 15 * sweep.strength;
+        reasons.push(`🦅 Sweep صاعد (+${(15 * sweep.strength).toFixed(0)})`);
+      }
+      if (sweep.type === 'SELL' && intendedDirection === 'SHORT') {
+        score += 15 * sweep.strength;
+        reasons.push(`🦅 Sweep هابط (+${(15 * sweep.strength).toFixed(0)})`);
+      }
+    }
+    
+    return { score: Math.min(score, 100), reasons };
+  }
+
+  static async calculateRR(data, currentPrice, direction) {
+    const atr = AdvancedIndicators.calculateATR(data);
+    if (!atr || atr === 0) return 0;
+    
+    if (direction === 'LONG') {
+      const tp = currentPrice + (atr * 3);
+      const sl = currentPrice - atr;
+      return (tp - currentPrice) / (currentPrice - sl);
+    } else {
+      const tp = currentPrice - (atr * 3);
+      const sl = currentPrice + atr;
+      return (currentPrice - tp) / (sl - currentPrice);
+    }
+  }
+}
+
+// ======================= 15. معالجة العملات المطورة =======================
+
+async function processCoinEnhanced(coin, kv, btcBullish, btcData, ethData, direction, learningSystem, riskManager, exchange) {
   try {
-    const res = await fetch(`https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`);
-    if (!res.ok) return null;
-    const data = await res.json();
-    const formatted = data.map(c => ({
-      time: new Date(c[0]),
-      open: +c[1],
-      high: +c[2],
-      low: +c[3],
-      close: +c[4],
-      vol: +c[5]
-    }));
-    dataCache.set(cacheKey, { data: formatted, timestamp: now });
-    return formatted;
-  } catch { return null; }
+    const symbol = coin + 'USDT';
+    
+    let signalsToday = kv ? parseInt(await kv.get('SIGNALS_TODAY') || '0') : 0;
+    if (signalsToday >= CONFIG.MAX_SIGNALS_PER_DAY) return null;
+    
+    const [data5m, data15m, data1h, data4h, dataDaily] = await Promise.all([
+      MultiExchangeData.getData(symbol, '5m', 100),
+      MultiExchangeData.getData(symbol, '15m', 200),
+      MultiExchangeData.getData(symbol, '1h', 200),
+      MultiExchangeData.getData(symbol, '4h', 100),
+      MultiExchangeData.getData(symbol, '1d', 30)
+    ]);
+    
+    if (!data15m) return null;
+    
+    const currentPrice = data15m[data15m.length - 1].close;
+    
+    const score = await EnhancedInstitutionalScoring.calculateScore(
+      coin, data15m, data1h, data4h, dataDaily,
+      currentPrice, btcBullish, btcData, ethData,
+      direction, learningSystem, exchange
+    );
+    
+    if (score.score < CONFIG.RECOMMENDATIONS.MIN_CONFIDENCE) return null;
+    if (score.rr < CONFIG.MIN_RISK_REWARD) return null;
+    
+    const atr = AdvancedIndicators.calculateATR(data15m);
+    const { tp1, tp2, tp3, sl } = calculateLevels(currentPrice, atr, direction);
+    
+    const positionSize = riskManager.calculatePositionSize(currentPrice, sl, 2);
+    
+    return {
+      coin,
+      symbol,
+      exchange,
+      direction,
+      entry: currentPrice,
+      tp1, tp2, tp3, sl,
+      positionSize,
+      score: score.score,
+      smcScore: score.smcScore,
+      rr: score.rr,
+      dailyBias: score.dailyBias,
+      sentimentScore: score.sentimentScore,
+      htfAlignment: score.htfAlignment,
+      priorityScore: AdvancedRecommendationSystem.calculatePriorityScore({...score, direction, rr: score.rr}),
+      reasons: score.reasons,
+      timestamp: Date.now()
+    };
+    
+  } catch (e) {
+    console.error(`Error ${coin} (${exchange}):`, e);
+    return null;
+  }
+}
+
+function calculateLevels(price, atr, direction) {
+  if (atr && atr > 0) {
+    if (direction === 'LONG') {
+      return {
+        tp1: price + (atr * CONFIG.TP_ATR_MULTIPLIER[0]),
+        tp2: price + (atr * CONFIG.TP_ATR_MULTIPLIER[1]),
+        tp3: price + (atr * CONFIG.TP_ATR_MULTIPLIER[2]),
+        sl: price - (atr * 1)
+      };
+    } else {
+      return {
+        tp1: price - (atr * CONFIG.TP_ATR_MULTIPLIER[0]),
+        tp2: price - (atr * CONFIG.TP_ATR_MULTIPLIER[1]),
+        tp3: price - (atr * CONFIG.TP_ATR_MULTIPLIER[2]),
+        sl: price + (atr * 1)
+      };
+    }
+  } else {
+    if (direction === 'LONG') {
+      return {
+        tp1: price * 1.03,
+        tp2: price * 1.06,
+        tp3: price * 1.10,
+        sl: price * 0.97
+      };
+    } else {
+      return {
+        tp1: price * 0.97,
+        tp2: price * 0.94,
+        tp3: price * 0.90,
+        sl: price * 1.03
+      };
+    }
+  }
+}
+
+// ======================= 16. إرسال التوصيات =======================
+
+async function sendEnhancedSignal(signal) {
+  const emoji = signal.score >= 95 ? '🟢' : signal.score >= 88 ? '🟡' : '🔵';
+  const type = signal.score >= 95 ? 'STRONG BUY' : signal.score >= 88 ? 'BUY' : 'WATCHLIST';
+  
+  let msg = `${emoji} *${type} - ${signal.score}%* ${emoji}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `🪙 *${signal.coin}/USDT* (${signal.exchange})\n`;
+  msg += `🎯 *${signal.direction === 'LONG' ? 'LONG 📈' : 'SHORT 📉'}*\n`;
+  msg += `💰 *$${signal.entry.toFixed(8)}*\n\n`;
+  msg += `📊 *R/R: 1:${signal.rr.toFixed(2)}*\n`;
+  msg += `🎯 TP1: *$${signal.tp1.toFixed(8)}*\n`;
+  msg += `🎯 TP2: *$${signal.tp2.toFixed(8)}*\n`;
+  msg += `🎯 TP3: *$${signal.tp3.toFixed(8)}*\n`;
+  msg += `🛑 SL: *$${signal.sl.toFixed(8)}*\n\n`;
+  msg += `📌 *الأسباب:*\n`;
+  msg += `${signal.reasons.slice(0, 6).join("\n")}\n\n`;
+  msg += `📈 Daily Bias: ${signal.dailyBias}\n`;
+  msg += `💭 Sentiment: ${signal.sentimentScore.toFixed(0)}%\n`;
+  msg += `🔄 HTF Alignment: ${signal.htfAlignment > 0.7 ? '✅' : '⚠️'}\n`;
+  msg += `📊 الأولوية: ${signal.priorityScore.toFixed(0)}%\n`;
+  msg += `⚡ *V11.0 Multi-Exchange Ultimate*`;
+  
+  await sendTelegram(REQUIRED_CHANNEL, msg);
+}
+
+// ======================= 17. دوال جلب البيانات الأساسية =======================
+
+async function getData(symbol, interval = '15m', limit = 200) {
+  return await MultiExchangeData.getData(symbol, interval, limit);
 }
 
 async function getOpenInterestUSD(symbol) {
@@ -1212,235 +1610,131 @@ async function getBTCDominance() {
   } catch { return null; }
 }
 
-async function fetchAlphaCoins() {
+async function fetchAlphaCoins(exchange = 'Binance') {
   try {
-    const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
-    const data = await res.json();
-    const usdtPairs = data.filter(i =>
-      i.symbol.endsWith('USDT') &&
-      !STABLE_COINS_BLACKLIST.some(stable => i.symbol.startsWith(stable))
-    );
-    const filtered = usdtPairs.map(pair => ({
-      symbol: pair.symbol.replace('USDT', ''),
-      volumeUSD: parseFloat(pair.quoteVolume),
-      change24h: parseFloat(pair.priceChangePercent),
-      price: parseFloat(pair.lastPrice),
-      count: parseInt(pair.count)
-    }))
-      .filter(c =>
-        c.volumeUSD > CONFIG.INSTITUTIONAL.MIN_VOLUME_ALPHA &&
-        c.count > 5000
-      )
-      .sort((a, b) => b.volumeUSD - a.volumeUSD)
-      .slice(0, 20);
-    return filtered.map(c => c.symbol);
-  } catch (e) { return []; }
-}
-
-async function checkLiquidity(symbol) {
-  try {
-    const stats = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${symbol}`).then(r => r.json());
-    const volumeUSD = parseFloat(stats.quoteVolume);
-    const count = parseInt(stats.count);
-    return (volumeUSD >= CONFIG.INSTITUTIONAL.MIN_VOLUME_USD && count >= 5000);
-  } catch { return false; }
-}
-
-async function checkFundingAndOI(symbol, intendedSide) {
-  try {
-    const fundingRate = await getFundingRate(symbol);
-    const oiUSD = await getOpenInterestUSD(symbol);
-    if (fundingRate === null || oiUSD === null) return true;
-    if (oiUSD < CONFIG.INSTITUTIONAL.MIN_OI_USD) return false;
-    if (intendedSide === 'LONG' && fundingRate > CONFIG.INSTITUTIONAL.MAX_FUNDING_RATE) return false;
-    if (intendedSide === 'SHORT' && fundingRate < CONFIG.INSTITUTIONAL.MIN_FUNDING_RATE) return false;
-    return true;
-  } catch { return true; }
-}
-
-// ======================= 11. معالجة العملات =======================
-
-async function processCoin(coin, kv, btcBullish, btcData, ethData, direction = 'LONG', learningSystem) {
-  try {
-    const symbol = coin + 'USDT';
-    let signalsToday = kv ? parseInt(await kv.get('SIGNALS_TODAY') || '0') : 0;
-    if (signalsToday >= CONFIG.MAX_SIGNALS_PER_DAY) return;
-
-    let cooldown = kv ? JSON.parse(await kv.get('COOLDOWN') || '{}') : {};
-    if (cooldown[symbol] && Date.now() - cooldown[symbol] < CONFIG.COOLDOWN_HOURS * 60 * 60 * 1000) return;
-
-    let lastDirection = kv ? await kv.get(`LAST_DIR_${symbol}`) : null;
-    if (lastDirection && Date.now() - parseInt(lastDirection.split('|')[1]) < 24 * 60 * 60 * 1000) {
-      if (lastDirection.split('|')[0] === direction) return;
+    let data;
+    
+    if (exchange === 'Binance') {
+      const res = await fetch('https://api.binance.com/api/v3/ticker/24hr');
+      data = await res.json();
+      
+      return data.filter(i =>
+        i.symbol.endsWith('USDT') &&
+        !STABLE_COINS_BLACKLIST.some(stable => i.symbol.startsWith(stable))
+      ).map(pair => ({
+        symbol: pair.symbol.replace('USDT', ''),
+        volumeUSD: parseFloat(pair.quoteVolume),
+        change24h: parseFloat(pair.priceChangePercent)
+      })).filter(c => c.volumeUSD > CONFIG.INSTITUTIONAL.MIN_VOLUME_ALPHA)
+        .sort((a, b) => b.volumeUSD - a.volumeUSD)
+        .slice(0, 15)
+        .map(c => c.symbol);
+        
+    } else if (exchange === 'Bybit') {
+      const res = await fetch(`${CONFIG.EXCHANGES.BYBIT.baseUrl}/v5/market/tickers?category=spot`);
+      const data = await res.json();
+      if (data.retCode !== 0 || !data.result?.list) return [];
+      
+      return data.result.list.filter(i =>
+        i.symbol.endsWith('USDT') &&
+        !STABLE_COINS_BLACKLIST.some(stable => i.symbol.startsWith(stable))
+      ).map(pair => ({
+        symbol: pair.symbol.replace('USDT', ''),
+        volumeUSD: parseFloat(pair.volume24h) * parseFloat(pair.lastPrice),
+        change24h: parseFloat(pair.price24hPcnt) * 100
+      })).filter(c => c.volumeUSD > 5000000)
+        .sort((a, b) => b.volumeUSD - a.volumeUSD)
+        .slice(0, 15)
+        .map(c => c.symbol);
     }
-
-    const [data5m, data15m, data1h, data4h, dataDaily] = await Promise.all([
-      getData(symbol, '5m', 100),
-      getData(symbol, '15m', 200),
-      getData(symbol, '1h', 200),
-      getData(symbol, '4h', 100),
-      getData(symbol, '1d', 30)
-    ]);
-
-    if (!data5m || !data15m || !data1h || !data4h || !dataDaily) return;
-
-    const currentPrice = data15m[data15m.length - 1].close;
-    const { score, reasons, rsiVal, volRatio, dailyBias, bos, choch, fvg, ob, liquidity, smt, vwap, cvd, killZone } =
-      await InstitutionalScoring.calculateScore(
-        coin, data15m, data1h, data4h, dataDaily,
-        currentPrice, btcBullish, btcData, ethData,
-        direction, learningSystem
-      );
-
-    if (direction === 'LONG' && dailyBias.bias === 'BEARISH') return;
-    if (direction === 'SHORT' && dailyBias.bias === 'BULLISH') return;
-    if (dailyBias.bias === 'NEUTRAL') return;
-
-    const hasGoodFunding = await checkFundingAndOI(symbol, direction);
-    if (!hasGoodFunding) return;
-
-    const atr = AdvancedIndicators.calculateATR(data15m);
-    let tp1, tp2, tp3, sl;
-
-    if (atr && atr > 0) {
-      if (direction === 'LONG') {
-        tp1 = currentPrice + (atr * CONFIG.TP_ATR_MULTIPLIER[0]);
-        tp2 = currentPrice + (atr * CONFIG.TP_ATR_MULTIPLIER[1]);
-        tp3 = currentPrice + (atr * CONFIG.TP_ATR_MULTIPLIER[2]);
-        sl = currentPrice - (atr * 1);
-      } else {
-        tp1 = currentPrice - (atr * CONFIG.TP_ATR_MULTIPLIER[0]);
-        tp2 = currentPrice - (atr * CONFIG.TP_ATR_MULTIPLIER[1]);
-        tp3 = currentPrice - (atr * CONFIG.TP_ATR_MULTIPLIER[2]);
-        sl = currentPrice + (atr * 1);
-      }
-    } else {
-      if (direction === 'LONG') {
-        tp1 = currentPrice * 1.03;
-        tp2 = currentPrice * 1.06;
-        tp3 = currentPrice * 1.10;
-        sl = currentPrice * 0.97;
-      } else {
-        tp1 = currentPrice * 0.97;
-        tp2 = currentPrice * 0.94;
-        tp3 = currentPrice * 0.90;
-        sl = currentPrice * 1.03;
-      }
-    }
-
-    const rr = direction === 'LONG' ? ((tp3 - currentPrice) / (currentPrice - sl)) : ((currentPrice - tp3) / (sl - currentPrice));
-    if (rr < CONFIG.MIN_RISK_REWARD) return;
-
-    let signalType = '🔵 WATCHLIST';
-    let emoji = '🔵';
-    if (score >= CONFIG.SCORE_STRONG) {
-      signalType = '🟢 STRONG BUY';
-      emoji = '🟢';
-    } else if (score >= CONFIG.SCORE_BUY) {
-      signalType = '🟡 BUY';
-      emoji = '🟡';
-    }
-
-    let msg = `${emoji} *${signalType} - ${score}%* ${emoji}\n`;
-    msg += `━━━━━━━━━━━━━━━━━━━━━━━\n`;
-    msg += `🪙 *${coin}/USDT*\n`;
-    msg += `🎯 *${direction === 'LONG' ? 'LONG 📈' : 'SHORT 📉'}*\n`;
-    msg += `💰 *$${currentPrice.toFixed(8)}*\n\n`;
-    msg += `📊 *R/R: 1:${rr.toFixed(2)}*\n`;
-    msg += `🎯 TP1: *$${tp1.toFixed(8)}*\n`;
-    msg += `🎯 TP2: *$${tp2.toFixed(8)}*\n`;
-    msg += `🎯 TP3: *$${tp3.toFixed(8)}*\n`;
-    msg += `🛑 SL: *$${sl.toFixed(8)}*\n\n`;
-    msg += `📌 *الأسباب:*\n`;
-    msg += `${reasons.slice(0, 8).join("\n")}\n\n`;
-    msg += `📊 RSI: ${rsiVal} | VOL: ${volRatio.toFixed(1)}x\n`;
-    msg += `📈 Daily Bias: ${dailyBias.bias} (${(dailyBias.confidence * 100).toFixed(0)}%)\n`;
-    msg += `⏰ ${killZone ? `Kill Zone: ${killZone.name}` : 'خارج الجلسة'}\n`;
-    msg += `⚡ *V10.0 Institutional Ultimate*`;
-
-    await sendTelegram(REQUIRED_CHANNEL, msg);
-
-    if (kv) {
-      let active = JSON.parse(await kv.get('ACTIVE_SIGNALS') || '[]');
-      active.push({
-        coin,
-        symbol: coin,
-        side: direction === 'LONG' ? 'LONG 📈' : 'SHORT 📉',
-        entry: currentPrice,
-        tp1,
-        tp2,
-        tp3,
-        sl,
-        tp1Hit: false,
-        tp2Hit: false,
-        tp3Hit: false,
-        status: 'OPEN',
-        timestamp: Date.now(),
-        score,
-        rr,
-        dailyBias: dailyBias.bias,
-        indicators: {
-          bos: !!bos,
-          choch: !!choch,
-          fvg: !!fvg && !fvg.isMitigated,
-          ob: !!ob && !ob.isMitigated,
-          sweep: liquidity?.hasSweep || false,
-          smt: !!smt,
-          vwap: !!vwap,
-          cvd: !!cvd
-        }
-      });
-      await kv.put('ACTIVE_SIGNALS', JSON.stringify(active));
-      cooldown[symbol] = Date.now();
-      await kv.put('COOLDOWN', JSON.stringify(cooldown));
-      await kv.put(`LAST_DIR_${symbol}`, `${direction}|${Date.now()}`);
-      await kv.put('SIGNALS_TODAY', (signalsToday + 1).toString());
-    }
-
+    
+    return [];
   } catch (e) {
-    console.error(`Error ${coin}:`, e);
+    console.error(`Error fetching alpha coins from ${exchange}:`, e);
+    return [];
   }
 }
 
-// ======================= 12. الماسح الضوئي المؤسسي =======================
+// ======================= 18. الماسح الضوئي المتطور =======================
 
-async function institutionalScanner(env) {
-  console.log('🔄 Institutional V10.0 Scanner Starting...');
-
+async function advancedScanner(env) {
+  console.log('🔄 Advanced Scanner V11.0 Starting...');
+  console.log('📊 Multi-Exchange Mode: Binance + Bybit');
+  
   const kv = env?.SIGNALS_KV;
   const learningSystem = new InstitutionalLearningSystem(kv);
   await learningSystem.initialize();
-
-  await manageActiveSignals(kv, learningSystem);
-
-  const btcBullish = await isBTCBullish();
-  const [btcData, ethData] = await Promise.all([
+  
+  const riskManager = new AdvancedRiskManager(kv);
+  await riskManager.initialize();
+  
+  const canTrade = riskManager.canTrade();
+  if (!canTrade.allowed) {
+    console.log(`⛔ ${canTrade.reason}`);
+    return;
+  }
+  
+  const [btcBullish, btcData, ethData] = await Promise.all([
+    isBTCBullish(),
     getData('BTCUSDT', '15m', 100),
     getData('ETHUSDT', '15m', 100)
   ]);
-
+  
   let watchList = [...INSTITUTIONAL_WATCH_LIST];
-
-  const alphaCoins = await fetchAlphaCoins();
+  
+  const [alphaBinance, alphaBybit] = await Promise.all([
+    fetchAlphaCoins('Binance'),
+    fetchAlphaCoins('Bybit')
+  ]);
+  
+  const alphaCoins = [...new Set([...alphaBinance, ...alphaBybit])];
   if (alphaCoins.length > 0) {
-    watchList = [...new Set([...watchList, ...alphaCoins])].slice(0, 35);
-    console.log(`📊 تم إضافة ${alphaCoins.length} عملة ألفا جديدة`);
+    watchList = [...new Set([...watchList, ...alphaCoins])].slice(0, 50);
+    console.log(`📊 تم إضافة ${alphaCoins.length} عملة ألفا`);
   }
-
+  
+  let allSignals = [];
+  
   for (const direction of ['LONG', 'SHORT']) {
     for (let i = 0; i < watchList.length; i += CONFIG.BATCH_SIZE) {
       const batch = watchList.slice(i, i + CONFIG.BATCH_SIZE);
-      await Promise.all(batch.map(coin =>
-        processCoin(coin, kv, btcBullish, btcData, ethData, direction, learningSystem)
-      ));
+      
+      const results = await Promise.all(batch.map(async coin => {
+        let signal = await processCoinEnhanced(
+          coin, kv, btcBullish, btcData, ethData,
+          direction, learningSystem, riskManager, 'Binance'
+        );
+        
+        if (!signal) {
+          signal = await processCoinEnhanced(
+            coin, kv, btcBullish, btcData, ethData,
+            direction, learningSystem, riskManager, 'Bybit'
+          );
+        }
+        
+        return signal;
+      }));
+      
+      allSignals = [...allSignals, ...results.filter(s => s !== null)];
       await delay(CONFIG.DELAY);
     }
   }
-
-  console.log('✅ Institutional V10.0 Scan Complete');
+  
+  const bestSignals = AdvancedRecommendationSystem.filterRecommendations(allSignals);
+  
+  if (bestSignals.length > 0) {
+    for (const signal of bestSignals) {
+      await sendEnhancedSignal(signal);
+    }
+    console.log(`✅ تم إرسال ${bestSignals.length} توصية ممتازة`);
+  } else {
+    console.log('📭 لا توجد توصيات مؤهلة حالياً');
+  }
+  
+  console.log('✅ Advanced Scanner V11.0 Complete');
 }
 
-// ======================= 13. إدارة الإشارات النشطة =======================
+// ======================= 19. إدارة الإشارات النشطة =======================
 
 async function manageActiveSignals(kv, learningSystem) {
   let active = [], history = [];
@@ -1553,142 +1847,7 @@ async function manageActiveSignals(kv, learningSystem) {
   }
 }
 
-// ======================= 14. Dashboard =======================
-
-function getDashboardHTML(activeSignals, history, learningSystem) {
-  const stats = learningSystem?.stats || {};
-  const wins = history.filter(s => s.status === 'WIN').length;
-  const losses = history.filter(s => s.status === 'LOSS').length;
-  const totalProfit = history.reduce((sum, s) => sum + (s.finalProfit || 0), 0);
-  const winRate = history.length ? ((wins / history.length) * 100).toFixed(1) : 0;
-
-  const topCoins = Object.entries(stats.coinPerformance || {})
-    .sort((a, b) => (b[1].wins / b[1].total) - (a[1].wins / a[1].total))
-    .slice(0, 5);
-
-  const bestTime = learningSystem?.getBestTimeToTrade();
-  const bestDay = learningSystem?.getBestDayToTrade();
-  const riskMetrics = stats.riskMetrics || {};
-
-  const longTrades = history.filter(s => s.side === 'LONG 📈');
-  const shortTrades = history.filter(s => s.side === 'SHORT 📉');
-  const longWins = longTrades.filter(s => s.status === 'WIN').length;
-  const shortWins = shortTrades.filter(s => s.status === 'WIN').length;
-  const longWinRate = longTrades.length ? (longWins / longTrades.length * 100).toFixed(1) : 0;
-  const shortWinRate = shortTrades.length ? (shortWins / shortTrades.length * 100).toFixed(1) : 0;
-
-  return `<!DOCTYPE html>
-  <html>
-  <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>TRADING AI PRO V10.0 - Dashboard</title>
-    <style>
-      *{margin:0;padding:0;box-sizing:border-box}
-      body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:linear-gradient(135deg,#0f0f1a 0%,#1a1a2e 100%);color:#fff;padding:20px}
-      .container{max-width:1400px;margin:0 auto}
-      h1{text-align:center;margin-bottom:20px;font-size:2em;background:linear-gradient(135deg,#00b4d8,#90e0ef);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
-      .subtitle{text-align:center;color:#888;margin-bottom:30px;font-size:14px}
-      .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:15px;margin-bottom:30px}
-      .stat-card{background:rgba(255,255,255,0.08);border-radius:12px;padding:15px;text-align:center;backdrop-filter:blur(10px)}
-      .stat-card h3{font-size:11px;opacity:0.7;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
-      .stat-card .value{font-size:26px;font-weight:bold}
-      .stat-card .value.profit{color:#00ff88}
-      .stat-card .value.loss{color:#ff4444}
-      .stat-card .value.gold{color:#ffd700}
-      .stat-card .value.blue{color:#00b4d8}
-      .grid-2{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:20px;margin-bottom:30px}
-      .card{background:rgba(255,255,255,0.05);border-radius:12px;padding:20px}
-      .card h3{color:#00b4d8;margin-bottom:15px;font-size:16px}
-      table{width:100%;border-collapse:collapse}
-      th,td{padding:10px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.05)}
-      th{color:#00b4d8;font-size:11px;text-transform:uppercase;letter-spacing:0.5px}
-      td{font-size:13px}
-      .status-win{color:#00ff88}
-      .status-loss{color:#ff4444}
-      .status-open{color:#ffaa00}
-      .badge{display:inline-block;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:bold}
-      .badge-win{background:rgba(0,255,136,0.2);color:#00ff88}
-      .badge-loss{background:rgba(255,68,68,0.2);color:#ff4444}
-      .badge-open{background:rgba(255,170,0,0.2);color:#ffaa00}
-      .footer{text-align:center;color:#555;font-size:11px;margin-top:30px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.05)}
-      @media(max-width:768px){.stats-grid{grid-template-columns:repeat(3,1fr)}.grid-2{grid-template-columns:1fr}}
-      @media(max-width:500px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <h1>🏆 TRADING AI PRO V10.0</h1>
-      <div class="subtitle">Institutional Ultimate Edition - Smart Money Concept</div>
-      
-      <div class="stats-grid">
-        <div class="stat-card"><h3>📊 إجمالي</h3><div class="value gold">${history.length + activeSignals.length}</div></div>
-        <div class="stat-card"><h3>✅ الرابحة</h3><div class="value profit">${wins}</div></div>
-        <div class="stat-card"><h3>❌ الخاسرة</h3><div class="value loss">${losses}</div></div>
-        <div class="stat-card"><h3>📈 نسبة النجاح</h3><div class="value gold">${winRate}%</div></div>
-        <div class="stat-card"><h3>💰 الأرباح</h3><div class="value ${totalProfit >= 0 ? 'profit' : 'loss'}">${totalProfit >= 0 ? '+' : ''}${totalProfit.toFixed(2)}%</div></div>
-        <div class="stat-card"><h3>⚡ نشطة</h3><div class="value blue">${activeSignals.length}</div></div>
-      </div>
-      
-      <div class="stats-grid">
-        <div class="stat-card"><h3>🟢 LONG %</h3><div class="value profit">${longWinRate}%</div></div>
-        <div class="stat-card"><h3>🔴 SHORT %</h3><div class="value profit">${shortWinRate}%</div></div>
-        <div class="stat-card"><h3>🎯 Profit Factor</h3><div class="value gold">${(riskMetrics.profitFactor || 0).toFixed(2)}</div></div>
-        <div class="stat-card"><h3>💰 Expectancy</h3><div class="value ${(riskMetrics.expectancy || 0) >= 0 ? 'profit' : 'loss'}">${(riskMetrics.expectancy || 0).toFixed(2)}</div></div>
-        <div class="stat-card"><h3>⏰ أفضل وقت</h3><div class="value gold">${bestTime !== null ? bestTime + ':00' : 'N/A'}</div></div>
-        <div class="stat-card"><h3>📅 أفضل يوم</h3><div class="value gold">${bestDay}</div></div>
-      </div>
-      
-      <div class="grid-2">
-        <div class="card">
-          <h3>🏆 أفضل 5 عملات</h3>
-          <table>
-            <thead><tr><th>العملة</th><th>الصفقات</th><th>نسبة النجاح</th><th>الربح</th></tr></thead>
-            <tbody>
-              ${topCoins.map(([coin, data]) => `
-                <tr>
-                  <td><strong>${coin}</strong></td>
-                  <td>${data.total}</td>
-                  <td class="${(data.wins/data.total*100) >= 50 ? 'status-win' : 'status-loss'}">${(data.wins/data.total*100).toFixed(1)}%</td>
-                  <td class="${data.profit >= 0 ? 'status-win' : 'status-loss'}">${data.profit >= 0 ? '+' : ''}${data.profit.toFixed(1)}%</td>
-                </tr>
-              `).join('')}
-              ${topCoins.length === 0 ? '<tr><td colspan="4">لا توجد بيانات كافية</td></tr>' : ''}
-            </tbody>
-          </table>
-        </div>
-        
-        <div class="card">
-          <h3>⚡ الإشارات النشطة</h3>
-          <table>
-            <thead><tr><th>العملة</th><th>النوع</th><th>الدخول</th><th>TP1</th><th>TP2</th><th>TP3</th><th>SL</th></tr></thead>
-            <tbody>
-              ${activeSignals.map(s => `
-                <tr>
-                  <td><strong>${s.coin}</strong></td>
-                  <td>${s.side}</td>
-                  <td>$${s.entry?.toFixed(6)}</td>
-                  <td>$${s.tp1?.toFixed(6)}</td>
-                  <td>$${s.tp2?.toFixed(6)}</td>
-                  <td>$${s.tp3?.toFixed(6)}</td>
-                  <td>$${s.sl?.toFixed(6)}</td>
-                </tr>
-              `).join('')}
-              ${activeSignals.length === 0 ? '<tr><td colspan="7">لا توجد إشارات نشطة</td></tr>' : ''}
-            </tbody>
-          </table>
-        </div>
-      </div>
-      
-      <div class="footer">
-        V10.0 Institutional Ultimate Edition | Powered by SMC/ICT
-      </div>
-    </div>
-  </body>
-  </html>`;
-}
-
-// ======================= 15. الأوامر والقوائم =======================
+// ======================= 20. Dashboard =======================
 
 const MENU = {
   inline_keyboard: [
@@ -1698,6 +1857,130 @@ const MENU = {
     [{ text: "🔄 فحص فوري", callback_data: "scan" }]
   ]
 };
+
+function getDashboardHTML(activeSignals, history, riskData) {
+  const stats = calculateStats(history);
+  
+  return `<!DOCTYPE html>
+  <html>
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>TRADING AI PRO V11.0 - Dashboard</title>
+    <style>
+      *{margin:0;padding:0;box-sizing:border-box}
+      body{font-family:'Segoe UI',sans-serif;background:#0a0a1a;color:#fff;padding:20px}
+      .container{max-width:1400px;margin:0 auto}
+      .header{text-align:center;padding:30px 0}
+      .header h1{font-size:2.5em;background:linear-gradient(135deg,#00d4ff,#7b2ffc);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+      .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:15px;margin-bottom:30px}
+      .stat-card{background:rgba(255,255,255,0.05);border-radius:15px;padding:20px;text-align:center;border:1px solid rgba(255,255,255,0.05)}
+      .stat-card .label{font-size:11px;text-transform:uppercase;color:#888;letter-spacing:1px}
+      .stat-card .value{font-size:28px;font-weight:bold;margin-top:8px}
+      .stat-card .value.green{color:#00ff88}
+      .stat-card .value.red{color:#ff4444}
+      .stat-card .value.gold{color:#ffd700}
+      .stat-card .value.blue{color:#00b4d8}
+      .card{background:rgba(255,255,255,0.05);border-radius:15px;padding:20px;margin-bottom:20px;border:1px solid rgba(255,255,255,0.05)}
+      .card h3{color:#00b4d8;margin-bottom:15px;font-size:16px}
+      table{width:100%;border-collapse:collapse;font-size:13px}
+      th,td{padding:10px;text-align:left;border-bottom:1px solid rgba(255,255,255,0.05)}
+      th{color:#00b4d8;font-size:11px;text-transform:uppercase}
+      .status-win{color:#00ff88}
+      .status-loss{color:#ff4444}
+      .badge{padding:2px 12px;border-radius:20px;font-size:11px;font-weight:bold}
+      .badge-win{background:rgba(0,255,136,0.2);color:#00ff88}
+      .badge-loss{background:rgba(255,68,68,0.2);color:#ff4444}
+      .badge-open{background:rgba(255,170,0,0.2);color:#ffaa00}
+      .footer{text-align:center;color:#555;font-size:12px;margin-top:30px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.05)}
+      @media(max-width:600px){.stats-grid{grid-template-columns:repeat(2,1fr)}}
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>🏆 TRADING AI PRO V11.0</h1>
+        <div style="color:#666;font-size:14px">Multi-Exchange Ultimate Edition • SMC/ICT</div>
+      </div>
+      
+      <div class="stats-grid">
+        <div class="stat-card"><div class="label">📊 إجمالي</div><div class="value gold">${history.length + activeSignals.length}</div></div>
+        <div class="stat-card"><div class="label">✅ الرابحة</div><div class="value green">${history.filter(s => s.status === 'WIN').length}</div></div>
+        <div class="stat-card"><div class="label">❌ الخاسرة</div><div class="value red">${history.filter(s => s.status === 'LOSS').length}</div></div>
+        <div class="stat-card"><div class="label">📈 نسبة النجاح</div><div class="value gold">${stats.winRate || 0}%</div></div>
+        <div class="stat-card"><div class="label">💰 الأرباح</div><div class="value ${stats.totalProfit >= 0 ? 'green' : 'red'}">${stats.totalProfit >= 0 ? '+' : ''}${(stats.totalProfit || 0).toFixed(2)}%</div></div>
+        <div class="stat-card"><div class="label">⚡ نشطة</div><div class="value blue">${activeSignals.length}</div></div>
+        <div class="stat-card"><div class="label">🎯 Profit Factor</div><div class="value gold">${stats.profitFactor || 'N/A'}</div></div>
+        <div class="stat-card"><div class="label">⭐ التقييم</div><div class="value gold">${stats.grade || 'N/A'}</div></div>
+      </div>
+      
+      <div class="card">
+        <h3>⚡ الإشارات النشطة</h3>
+        <table>
+          <thead><tr><th>العملة</th><th>النوع</th><th>الدخول</th><th>TP1</th><th>TP2</th><th>TP3</th><th>SL</th></tr></thead>
+          <tbody>
+            ${activeSignals.map(s => `
+              <tr>
+                <td><strong>${s.coin}</strong></td>
+                <td>${s.side}</td>
+                <td>$${s.entry?.toFixed(6)}</td>
+                <td>$${s.tp1?.toFixed(6)}</td>
+                <td>$${s.tp2?.toFixed(6)}</td>
+                <td>$${s.tp3?.toFixed(6)}</td>
+                <td>$${s.sl?.toFixed(6)}</td>
+              </tr>
+            `).join('')}
+            ${activeSignals.length === 0 ? '<tr><td colspan="7" style="text-align:center;color:#666">لا توجد إشارات نشطة</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+      
+      <div class="card">
+        <h3>📜 آخر الصفقات</h3>
+        <table>
+          <thead><tr><th>العملة</th><th>النوع</th><th>الربح</th><th>النتيجة</th></tr></thead>
+          <tbody>
+            ${history.slice(0, 10).map(s => `
+              <tr>
+                <td><strong>${s.coin}</strong></td>
+                <td>${s.side}</td>
+                <td class="${(s.finalProfit || 0) >= 0 ? 'status-win' : 'status-loss'}">${(s.finalProfit || 0).toFixed(2)}%</td>
+                <td><span class="badge ${s.status === 'WIN' ? 'badge-win' : 'badge-loss'}">${s.status === 'WIN' ? '✅ ربح' : '❌ خسارة'}</span></td>
+              </tr>
+            `).join('')}
+            ${history.length === 0 ? '<tr><td colspan="4" style="text-align:center;color:#666">لا توجد صفقات سابقة</td></tr>' : ''}
+          </tbody>
+        </table>
+      </div>
+      
+      <div class="footer">V11.0 Multi-Exchange Ultimate Edition • ${new Date().toLocaleString()}</div>
+    </div>
+  </body>
+  </html>`;
+}
+
+function calculateStats(history) {
+  if (history.length === 0) return { winRate: 0, totalProfit: 0, profitFactor: 'N/A', grade: 'N/A' };
+  
+  const wins = history.filter(s => s.status === 'WIN').length;
+  const losses = history.filter(s => s.status === 'LOSS').length;
+  const totalProfit = history.reduce((sum, s) => sum + (s.finalProfit || 0), 0);
+  const winRate = ((wins / history.length) * 100).toFixed(1);
+  
+  const totalWin = history.filter(s => s.status === 'WIN').reduce((sum, s) => sum + (s.finalProfit || 0), 0);
+  const totalLoss = Math.abs(history.filter(s => s.status === 'LOSS').reduce((sum, s) => sum + (s.finalProfit || 0), 0));
+  const profitFactor = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : totalWin > 0 ? '∞' : '0';
+  
+  let grade = 'N/A';
+  if (winRate > 70 && totalProfit > 0) grade = '⭐ ممتاز';
+  else if (winRate > 60 && totalProfit > 0) grade = '👍 جيد';
+  else if (winRate > 50) grade = '📊 متوسط';
+  else grade = '⚠️ يحتاج تطوير';
+  
+  return { winRate, totalProfit, profitFactor, grade };
+}
+
+// ======================= 21. دوال المساعدة للتليجرام =======================
 
 async function fetchTopMovers() {
   try {
@@ -1735,29 +2018,26 @@ async function isUserSubscribed(userId) {
   }
 }
 
-// ======================= 16. الـ Handler الرئيسي =======================
+// ======================= 22. الـ Handler الرئيسي =======================
 
 export default {
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(institutionalScanner(env));
+    ctx.waitUntil(advancedScanner(env));
   },
 
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const kv = env.SIGNALS_KV;
 
-    // ✅ Dashboard
     if (url.pathname === '/dashboard' || url.pathname === '/') {
       const active = kv ? JSON.parse(await kv.get('ACTIVE_SIGNALS') || '[]') : [];
       const history = kv ? JSON.parse(await kv.get('HISTORY_SIGNALS') || '[]') : [];
-      const learningSystem = new InstitutionalLearningSystem(kv);
-      await learningSystem.initialize();
-      return new Response(getDashboardHTML(active, history, learningSystem), {
+      const riskData = kv ? JSON.parse(await kv.get('RISK_DATA') || '{}') : {};
+      return new Response(getDashboardHTML(active, history, riskData), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       });
     }
 
-    // ✅ API Stats
     if (url.pathname === '/api/stats') {
       const history = kv ? JSON.parse(await kv.get('HISTORY_SIGNALS') || '[]') : [];
       const active = kv ? JSON.parse(await kv.get('ACTIVE_SIGNALS') || '[]') : [];
@@ -1771,24 +2051,21 @@ export default {
         winRate: history.length ? ((wins / history.length) * 100).toFixed(1) : 0,
         totalProfit: totalProfit.toFixed(2),
         activeSignals: active.length,
-        version: 'V10.0 Institutional Ultimate'
+        version: 'V11.0 Multi-Exchange Ultimate'
       }), {
         headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' }
       });
     }
 
-    // ✅ Scan يدوي
     if (url.pathname === '/scan') {
-      ctx.waitUntil(institutionalScanner(env));
-      return new Response('🔍 Institutional V10.0 Scanning...', { status: 200 });
+      ctx.waitUntil(advancedScanner(env));
+      return new Response('🔍 Advanced Scanner V11.0 Scanning...', { status: 200 });
     }
 
-    // ✅ Webhook
     if (url.pathname === '/webhook' && request.method === 'POST') {
       try {
         const update = await request.json();
 
-        // ✅ Callback Query
         if (update.callback_query) {
           const cb = update.callback_query;
           const data = cb.data;
@@ -1828,8 +2105,8 @@ export default {
           }
 
           if (data === 'scan') {
-            ctx.waitUntil(institutionalScanner(env));
-            await sendTelegram(cb.message.chat.id, '🔍 *جاري الفحص المؤسسي V10.0...*\n⏳ سيتم إرسال الإشارات فور ظهورها.');
+            ctx.waitUntil(advancedScanner(env));
+            await sendTelegram(cb.message.chat.id, '🔍 *جاري الفحص المؤسسي V11.0...*\n⏳ سيتم إرسال الإشارات فور ظهورها.');
           } else if (data === 'top') {
             const movers = await fetchTopMovers();
             await sendTelegram(cb.message.chat.id,
@@ -1847,7 +2124,7 @@ export default {
             );
           } else if (data === 'dashboard') {
             await sendTelegram(cb.message.chat.id,
-              `📊 *Dashboard V10.0*\nhttps://${url.hostname}/dashboard`
+              `📊 *Dashboard V11.0*\nhttps://${url.hostname}/dashboard`
             );
           } else if (data === 'my_signals') {
             let active = kv ? JSON.parse(await kv.get('ACTIVE_SIGNALS') || '[]') : [];
@@ -1869,7 +2146,6 @@ export default {
           return new Response('OK');
         }
 
-        // ✅ الرسائل
         if (update.message?.text) {
           const chatId = update.message.chat.id;
           const text = update.message.text.trim();
@@ -1878,14 +2154,14 @@ export default {
 
           if (text === '/start') {
             if (!isSubscribed) {
-              const startMsg = `🤖 *TRADING AI PRO V10.0*\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *الاشتراك مطلوب للاستخدام!*\n\nيرجى الاشتراك في قناتنا أولاً:\n👉 ${REQUIRED_CHANNEL}\n\nبعد الاشتراك، ارسل /start مرة أخرى للتحقق.`;
+              const startMsg = `🤖 *TRADING AI PRO V11.0*\n━━━━━━━━━━━━━━━━━━━━━\n\n⚠️ *الاشتراك مطلوب للاستخدام!*\n\nيرجى الاشتراك في قناتنا أولاً:\n👉 ${REQUIRED_CHANNEL}\n\nبعد الاشتراك، ارسل /start مرة أخرى للتحقق.`;
               const subKeyboard = {
                 inline_keyboard: [[{ text: "📢 انضم للقناة", url: `https://t.me/${REQUIRED_CHANNEL.replace('@', '')}` }]]
               };
               await sendTelegram(chatId, startMsg, subKeyboard);
             } else {
               await sendTelegram(chatId,
-                `🤖 *TRADING AI PRO V10.0* 🔐\n━━━━━━━━━━━━━━━━━━━━━\n✅ *اشتراكك نشط* ✅\n\n🔹 *المميزات:*\n✅ Institutional SMC\n✅ Daily Bias متقدم\n✅ Order Block + FVG + Sweep\n✅ SMT Divergence\n✅ VWAP + Volume Profile\n✅ CVD + Footprint\n✅ نظام تعلم ذاتي\n✅ Dashboard متطور\n\n📊 Dashboard: https://${url.hostname}/dashboard\n\nاختر من القائمة:`, MENU
+                `🤖 *TRADING AI PRO V11.0* 🔐\n━━━━━━━━━━━━━━━━━━━━━\n✅ *اشتراكك نشط* ✅\n\n🔹 *المميزات:*\n✅ Institutional SMC\n✅ Daily Bias متقدم\n✅ Multi-Exchange (Binance + Bybit)\n✅ Order Block + FVG + Sweep\n✅ SMT Divergence\n✅ VWAP + Volume Profile\n✅ CVD + Footprint\n✅ نظام تعلم ذاتي\n✅ إدارة مخاطر متقدمة\n✅ Dashboard متطور\n\n📊 Dashboard: https://${url.hostname}/dashboard\n\nاختر من القائمة:`, MENU
               );
             }
           } else if (!isSubscribed) {
@@ -1897,8 +2173,8 @@ export default {
           } else if (text === '/menu') {
             await sendTelegram(chatId, '📋 *القائمة الرئيسية*\nاختر أحد الخيارات:', MENU);
           } else if (text === '/scan') {
-            ctx.waitUntil(institutionalScanner(env));
-            await sendTelegram(chatId, '🔍 *جاري الفحص المؤسسي V10.0...*\n⏳ سيتم إرسال الإشارات فور ظهورها.');
+            ctx.waitUntil(advancedScanner(env));
+            await sendTelegram(chatId, '🔍 *جاري الفحص المؤسسي V11.0...*\n⏳ سيتم إرسال الإشارات فور ظهورها.');
           } else {
             await sendTelegram(chatId, `📋 استخدم /start للقائمة الرئيسية\n📊 Dashboard: https://${url.hostname}/dashboard`);
           }
